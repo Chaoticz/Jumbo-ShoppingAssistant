@@ -12,6 +12,8 @@ export type MenuCategory = "AVG & stamppot" | "Pasta & gerechten" | "Kant-en-kla
 export type StorageType = "Gekoeld" | "Houdbaar" | "Diepvries" | "Vers"
 
 export type Product = {
+  /** Payload-document-ID voor updates en echte databaseverwijdering. */
+  recordId: string
   /** Interne, onveranderlijke sleutel voor alle relaties in de app. */
   id: string
   name: string
@@ -27,6 +29,8 @@ export type Product = {
   unit: string
   price: number
   image: string
+  /** Relatie-ID van het gekoppelde Payload-mediabestand. */
+  imageRecordId?: string
   storage: StorageType
   preferred?: boolean
   enabled: boolean
@@ -44,11 +48,14 @@ export type RecipeIngredient = {
 }
 
 export type Recipe = {
+  /** Payload-document-ID voor updates en echte databaseverwijdering. */
+  recordId: string
   id: string
   name: string
   category: MenuCategory
   description: string
   image: string
+  imageRecordId?: string
   servings: number
   minutes: number
   ingredients: RecipeIngredient[]

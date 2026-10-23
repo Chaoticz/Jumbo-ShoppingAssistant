@@ -1,6 +1,115 @@
-import { useEffect, useMemo, useState } from "react"
-import { mergeCart } from "./cart"
-import { avgSteps, menuCategories, seedProducts, seedRecipes } from "./data"
+"use client"
+
+/** Kleine ingebouwde iconenset zodat acties overal visueel hetzelfde zijn. */
+
+/**
+ * Leest een waarde uit localStorage. Bij ontbrekende of beschadigde JSON wordt
+ * veilig de meegegeven standaardwaarde gebruikt, zodat de app kan blijven starten.
+ */
+
+/** Formatteert bedragen overal op dezelfde Nederlandse manier. */
+
+/**
+ * Hoofdcomponent: beheert navigatie, gedeelde catalogus en de actieve lokale winkelmand.
+ * Onderliggende pagina's ontvangen alleen de gegevens en acties die zij nodig hebben.
+ */
+// Producten en recepten komen uit de gedeelde Payload-database.
+// Per product-ID bewaren we een handmatig gekozen aantal verpakkingen.
+// De waarde 0 betekent: alleen uit de actieve lijst verbergen.
+
+/** Vaste bovenbalk met snelle toegang tot het actieve lijstje. */
+
+/** Hoofdnavigatie voor tablet-liggend en desktop. */
+
+/** Compacte navigatie voor smalle schermen en telefoons. */
+
+/** Gedeelde titelopbouw voor consistente pagina-hiërarchie. */
+
+/** Samenvatting van de actieve gezinsbestelling. */
+
+/**
+ * Visuele bestelzuil. Filters worden afgeleid van de centrale product- en
+ * receptcatalogus; kaarten zijn daardoor niet los in de interface vastgelegd.
+ */
+// Een eerder uit de lijst verborgen ingrediënt wordt bij een nieuwe keuze weer zichtbaar.
+
+/** Visuele receptkaart; een tweede tik opent de bestaande keuze om te bewerken. */
+
+/** Productkaart voor losse boodschappen met een groot tabletvriendelijk aanraakdoel. */
+
+/** Zijmand met de gekozen bronitems voordat ze naar productregels worden samengevoegd. */
+
+/** Bewerkt alleen een geplande maaltijd, niet het onderliggende recept. */
+
+/** Vierstapswizard die de tussenkeuzes bewaart wanneer de gebruiker teruggaat. */
+
+/**
+ * Toont de definitieve, samengevoegde boodschappenlijst.
+ *
+ * `lines` bevat al eventuele handmatige verpakkingsaantallen. Een aanpassing
+ * schrijft alleen naar `lineOverrides`; recepten en productrecords blijven
+ * daardoor onaangetast.
+ */
+
+/** Downloadt UTF-8 tekst zonder gegevens uit de visuele DOM te lezen. */
+
+/** Exporteert precies de zichtbare, handmatig aangepaste lijst naar CSV. */
+
+/** Past uitsluitend het te kopen aantal verpakkingen van deze bestelling aan. */
+
+/** Klein formulier voor een handmatig aantal winkelverpakkingen. */
+
+/** Overzicht van producten die lokaal als aanwezig zijn gemarkeerd. */
+
+/** Lokale bezorgsamenvatting; er vindt bewust geen automatische Jumbo-overdracht plaats. */
+
+/**
+ * Gedeelde beheeromgeving voor producten en recepten.
+ *
+ * Toevoegen en bewerken gebruiken hetzelfde formulier. Bij bewerken blijft de
+ * interne `id` behouden, zodat alle bestaande verwijzingen geldig blijven.
+ */
+
+/** Valideert en bewaart een product zonder bij bewerken een nieuw record te maken. */
+
+/** Slaat alle ingrediëntregels in hun huidige volgorde op onder dezelfde recept-ID. */
+
+/** Herbruikbare bevestiging voor destructieve acties. */
+
+/** Gedeelde formulierkaart voor zowel toevoegen als bewerken. */
+/** Label en invoerveld worden samen gegroepeerd voor leesbaarheid en toegankelijkheid. */
+/** Grote plus/minbediening voor aantallen en personen. */
+/** Scrollbare dialoog die ook binnen een staande tabletviewport past. */
+/** Onderste schuiflade voor de winkelmand op smallere tablets en telefoons. */
+/** Herbruikbare lege toestand met optionele vervolgstap. */
+
+/**
+ * Bereidt één stabiele opdracht voor de huidige lijst voor. Nogmaals klikken
+ * met exact dezelfde lijst hergebruikt hetzelfde ID en voorkomt dubbel werk.
+ */
+
+import { useEffect, useMemo, useRef, useState } from "react"
+import Image from "next/image"
+import { mergeCart } from "@/lib/groceries/cart"
+import { avgSteps, menuCategories } from "@/lib/groceries/catalog-ui"
+import {
+  deleteProductAction,
+  deleteRecipeAction,
+  saveProductAction,
+  saveRecipeAction,
+} from "../actions"
+import {
+  buildJumboExport,
+  jumboRowsToCsv,
+  jumboRowsToTxt,
+} from "@/lib/groceries/jumbo-export"
+import {
+  createCartFingerprint,
+  createJumboIntegrationJob,
+  integrationItemStatusLabels,
+  integrationStatusLabels,
+  type JumboIntegrationJob,
+} from "@/lib/groceries/jumbo-integration"
 import type {
   AvgCartItem,
   CartItem,
@@ -12,7 +121,7 @@ import type {
   RecipeIngredient,
   GroceryCategory,
   StorageType,
-} from "./types"
+} from "@/lib/groceries/types"
 
 const NAV = [
   "Overzicht",
@@ -22,6 +131,8 @@ const NAV = [
   "Bestellingen",
   "Beheer",
 ]
+const FALLBACK_IMAGE =
+  "https://images.unsplash.com/photo-1604719312566-8912e9227c6a?auto=format&fit=crop&w=900&q=80"
 const CATEGORY_ICONS: Record<MenuCategory, IconName> = {
   "AVG & stamppot": "plate",
   "Pasta & gerechten": "fork",
@@ -41,8 +152,20 @@ const NAV_ICONS: Record<string, IconName> = {
   Bestellingen: "history",
   Beheer: "settings",
 }
+type NavigationProps = {
+  page: string
+  go: (page: string) => void
+}
 
-/** Kleine ingebouwde iconenset zodat acties overal visueel hetzelfde zijn. */
+type StatProps = {
+  value: string | number
+  label: string
+}
+
+type InfoCardProps = {
+  title: string
+  text: string
+}
 function Icon({
   name,
   size = 20,
@@ -177,11 +300,6 @@ function Icon({
     </svg>
   )
 }
-
-/**
- * Leest een waarde uit localStorage. Bij ontbrekende of beschadigde JSON wordt
- * veilig de meegegeven standaardwaarde gebruikt, zodat de app kan blijven starten.
- */
 function load<T>(key: string, fallback: T): T {
   try {
     const value = localStorage.getItem(key)
@@ -190,25 +308,20 @@ function load<T>(key: string, fallback: T): T {
     return fallback
   }
 }
-
-/** Formatteert bedragen overal op dezelfde Nederlandse manier. */
 const money = (value: number) =>
   new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" }).format(
     value,
   )
-
-/**
- * Hoofdcomponent: beheert navigatie, catalogus, winkelmand en lokale opslag.
- * Onderliggende pagina's ontvangen alleen de gegevens en acties die zij nodig hebben.
- */
-export default function App() {
+export default function AppClient({
+  initialProducts,
+  initialRecipes,
+}: {
+  initialProducts: Product[]
+  initialRecipes: Recipe[]
+}) {
   const [page, setPage] = useState("Overzicht")
-  const [products, setProducts] = useState<Product[]>(() =>
-    load("tb-catalog-products-v1", seedProducts),
-  )
-  const [recipes, setRecipes] = useState<Recipe[]>(() =>
-    load("tb-catalog-recipes-v1", seedRecipes),
-  )
+  const [products, setProducts] = useState<Product[]>(initialProducts)
+  const [recipes, setRecipes] = useState<Recipe[]>(initialRecipes)
   const [cart, setCart] = useState<CartItem[]>(() =>
     load("tb-order-cart-v1", []),
   )
@@ -219,22 +332,10 @@ export default function App() {
   const [stock, setStock] = useState<Record<string, number>>(() =>
     load("tb-stock-v3", {}),
   )
-  // Per product-ID bewaren we een handmatig gekozen aantal verpakkingen.
-  // De waarde 0 betekent: alleen uit de actieve lijst verbergen.
   const [lineOverrides, setLineOverrides] = useState<Record<string, number>>(
     () => load("tb-list-overrides-v1", {}),
   )
 
-  useEffect(
-    () =>
-      localStorage.setItem("tb-catalog-products-v1", JSON.stringify(products)),
-    [products],
-  )
-  useEffect(
-    () =>
-      localStorage.setItem("tb-catalog-recipes-v1", JSON.stringify(recipes)),
-    [recipes],
-  )
   useEffect(
     () => localStorage.setItem("tb-order-cart-v1", JSON.stringify(cart)),
     [cart],
@@ -349,8 +450,6 @@ export default function App() {
     </div>
   )
 }
-
-/** Vaste bovenbalk met snelle toegang tot het actieve lijstje. */
 function Header({
   go,
   itemCount,
@@ -388,7 +487,7 @@ function Header({
             )}
           </button>
           <span className="hidden rounded-full bg-[#f3f3ee] px-3 py-2 text-xs font-bold text-muted sm:block">
-            Lokaal prototype
+            Catalogus gedeeld via Payload
           </span>
           <span className="grid h-11 w-11 place-items-center rounded-full bg-ink-deep text-sm font-bold text-white">
             TB
@@ -398,9 +497,7 @@ function Header({
     </header>
   )
 }
-
-/** Hoofdnavigatie voor tablet-liggend en desktop. */
-function Sidebar({ page, go }: { page: string go: (page: string) => void }) {
+function Sidebar({ page, go }: NavigationProps) {
   return (
     <aside className="hidden w-60 shrink-0 px-5 py-7 md:block">
       <nav className="sticky top-28 space-y-1">
@@ -432,9 +529,7 @@ function Sidebar({ page, go }: { page: string go: (page: string) => void }) {
     </aside>
   )
 }
-
-/** Compacte navigatie voor smalle schermen en telefoons. */
-function MobileNav({ page, go }: { page: string go: (page: string) => void }) {
+function MobileNav({ page, go }: NavigationProps) {
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 flex justify-around overflow-x-auto border-t border-line bg-white px-1 py-2 md:hidden">
       {NAV.slice(0, 5).map((item) => (
@@ -452,8 +547,6 @@ function MobileNav({ page, go }: { page: string go: (page: string) => void }) {
     </nav>
   )
 }
-
-/** Gedeelde titelopbouw voor consistente pagina-hiërarchie. */
 function PageTitle({
   eyebrow,
   title,
@@ -475,8 +568,6 @@ function PageTitle({
     </div>
   )
 }
-
-/** Samenvatting van de actieve gezinsbestelling. */
 function Dashboard({
   cart,
   lines,
@@ -553,11 +644,6 @@ function Dashboard({
     </section>
   )
 }
-
-/**
- * Visuele bestelzuil. Filters worden afgeleid van de centrale product- en
- * receptcatalogus; kaarten zijn daardoor niet los in de interface vastgelegd.
- */
 function Shop({
   products,
   recipes,
@@ -615,7 +701,6 @@ function Shop({
       replacements: {},
     }
     setCart((current) => [...current, item])
-    // Een eerder uit de lijst verborgen ingrediënt wordt bij een nieuwe keuze weer zichtbaar.
     setLineOverrides((current) => {
       const next = { ...current }
       recipe.ingredients.forEach(
@@ -882,8 +967,6 @@ function Shop({
     </section>
   )
 }
-
-/** Visuele receptkaart; een tweede tik opent de bestaande keuze om te bewerken. */
 function RecipeCard({
   recipe,
   selected,
@@ -900,8 +983,10 @@ function RecipeCard({
       }`}
     >
       <div className="relative h-48 overflow-hidden">
-        <img
-          src={recipe.image}
+        <Image
+          width={900}
+          height={600}
+          src={recipe.image || FALLBACK_IMAGE}
           alt={recipe.name}
           className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
         />
@@ -939,8 +1024,6 @@ function RecipeCard({
     </article>
   )
 }
-
-/** Productkaart voor losse boodschappen met een groot tabletvriendelijk aanraakdoel. */
 function ProductCard({
   product,
   count,
@@ -957,8 +1040,10 @@ function ProductCard({
       }`}
     >
       <div className="relative h-44 overflow-hidden bg-[#f1f1eb]">
-        <img
-          src={product.image}
+        <Image
+          width={900}
+          height={600}
+          src={product.image || FALLBACK_IMAGE}
           alt={product.name}
           className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
         />
@@ -990,8 +1075,6 @@ function ProductCard({
     </article>
   )
 }
-
-/** Zijmand met de gekozen bronitems voordat ze naar productregels worden samengevoegd. */
 function CartPanel({
   cart,
   setCart,
@@ -1128,8 +1211,6 @@ function CartPanel({
     </div>
   )
 }
-
-/** Bewerkt alleen een geplande maaltijd, niet het onderliggende recept. */
 function MealEditor({
   item,
   recipes,
@@ -1159,8 +1240,10 @@ function MealEditor({
   return (
     <Modal title={recipe.name} close={close} wide>
       <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
-        <img
-          src={recipe.image}
+        <Image
+          width={900}
+          height={600}
+          src={recipe.image || FALLBACK_IMAGE}
           alt={recipe.name}
           className="h-48 w-full rounded-2xl object-cover lg:h-full"
         />
@@ -1267,8 +1350,6 @@ function MealEditor({
     </Modal>
   )
 }
-
-/** Vierstapswizard die de tussenkeuzes bewaart wanneer de gebruiker teruggaat. */
 function AvgWizard({
   products,
   servings,
@@ -1338,8 +1419,10 @@ function AvgWizard({
                   }`}
                 >
                   <div className="relative h-28">
-                    <img
-                      src={product.image}
+                    <Image
+                      width={900}
+                      height={600}
+                      src={product.image || FALLBACK_IMAGE}
                       alt=""
                       className="h-full w-full object-cover"
                     />
@@ -1374,8 +1457,10 @@ function AvgWizard({
                 key={product.id}
                 className="overflow-hidden rounded-2xl border border-line bg-white"
               >
-                <img
-                  src={product.image}
+                <Image
+                  width={900}
+                  height={600}
+                  src={product.image || FALLBACK_IMAGE}
                   alt=""
                   className="h-28 w-full object-cover"
                 />
@@ -1431,14 +1516,6 @@ function AvgWizard({
     </Modal>
   )
 }
-
-/**
- * Toont de definitieve, samengevoegde boodschappenlijst.
- *
- * `lines` bevat al eventuele handmatige verpakkingsaantallen. Een aanpassing
- * schrijft alleen naar `lineOverrides`; recepten en productrecords blijven
- * daardoor onaangetast.
- */
 function ShoppingList({
   lines,
   checked,
@@ -1464,9 +1541,35 @@ function ShoppingList({
 }) {
   const [editingLine, setEditingLine] = useState<MergedCartLine | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
+  const [integrationOpen, setIntegrationOpen] = useState(false)
+  const [integrationJob, setIntegrationJob] =
+    useState<JumboIntegrationJob | null>(null)
+  const integrationJobRef = useRef<JumboIntegrationJob | null>(null)
   const categories = [...new Set(lines.map((line) => line.product.category))]
-
-  /** Exporteert precies de zichtbare, handmatig aangepaste lijst naar CSV. */
+  const pythonExport = useMemo(() => buildJumboExport(lines), [lines])
+  const openIntegration = () => {
+    const fingerprint = createCartFingerprint(lines)
+    const current = integrationJobRef.current
+    const next =
+      current?.cart_fingerprint === fingerprint
+        ? current
+        : createJumboIntegrationJob(
+            lines,
+            `jumbo-${window.crypto.randomUUID()}`,
+          )
+    integrationJobRef.current = next
+    setIntegrationJob(next)
+    setIntegrationOpen(true)
+  }
+  const downloadText = (filename: string, content: string, type: string) => {
+    const link = document.createElement("a")
+    link.href = URL.createObjectURL(
+      new Blob(["\uFEFF", content], { type: `${type};charset=utf-8` }),
+    )
+    link.download = filename
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }
   const exportCsv = () => {
     const rows = [
       "Categorie,Product,Merk,Verpakkingen,Verpakking,Prijs",
@@ -1503,8 +1606,6 @@ function ShoppingList({
     )
     flash("Boodschappenlijst gekopieerd")
   }
-
-  /** Past uitsluitend het te kopen aantal verpakkingen van deze bestelling aan. */
   const setPacks = (line: MergedCartLine, packs: number) =>
     setLineOverrides((current) => ({
       ...current,
@@ -1547,6 +1648,12 @@ function ShoppingList({
           className="touch-button rounded-xl border border-line bg-white px-5 py-3 text-sm font-black disabled:opacity-40"
         >
           Exporteer CSV
+        </button>
+        <button
+          onClick={openIntegration}
+          className="touch-button order-first w-full rounded-xl bg-jumbo px-5 py-3 text-sm font-black text-ink shadow-lg ring-2 ring-ink sm:w-auto"
+        >
+          Voeg toe aan Jumbo-winkelmand
         </button>
         <button
           onClick={() => setConfirmClear(true)}
@@ -1608,8 +1715,10 @@ function ShoppingList({
                         <Icon name="check" size={20} />
                       )}
                     </button>
-                    <img
-                      src={line.product.image}
+                    <Image
+                      width={900}
+                      height={600}
+                      src={line.product.image || FALLBACK_IMAGE}
                       alt=""
                       className="h-[72px] w-[72px] rounded-xl object-cover"
                     />
@@ -1698,6 +1807,216 @@ function ShoppingList({
           }}
         />
       )}
+      {integrationOpen && integrationJob && (
+        <Modal
+          title="Voeg toe aan Jumbo-winkelmand"
+          close={() => setIntegrationOpen(false)}
+          wide
+        >
+          <div className="rounded-2xl border border-[#e2b85b] bg-jumbo-soft p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-[#725b00]">
+                  Verbinding niet ingesteld
+                </p>
+                <h3 className="mt-1 text-xl font-black">
+                  De lokale Python-service is nog niet gekoppeld
+                </h3>
+                <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted">
+                  Deze website kan geen script op je computer of Raspberry Pi
+                  starten. De uiteindelijke koppeling krijgt een beveiligde
+                  agent die opdrachten ophaalt en statussen terugmeldt.
+                  Jumbo-cookies en wachtwoorden blijven uitsluitend in dat
+                  lokale Python-proces.
+                </p>
+              </div>
+              <span className="rounded-full bg-white px-3 py-2 text-xs font-black">
+                Nog niet verzonden
+              </span>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border border-line bg-white p-4">
+              <small className="font-bold text-muted">
+                Klaar om te versturen
+              </small>
+              <strong className="mt-1 block text-3xl">
+                {integrationJob.items.length}
+              </strong>
+            </div>
+            <div className="rounded-2xl border border-line bg-white p-4">
+              <small className="font-bold text-muted">
+                Handmatige controle
+              </small>
+              <strong className="mt-1 block text-3xl">
+                {integrationJob.missing_identifiers.length}
+              </strong>
+            </div>
+            <div className="rounded-2xl border border-line bg-white p-4">
+              <small className="font-bold text-muted">Opdrachtstatus</small>
+              <strong className="mt-2 block text-sm">
+                {integrationStatusLabels[integrationJob.status]}
+              </strong>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-line bg-white p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-muted">
+                  Unieke bestelopdracht
+                </p>
+                <code className="mt-1 block break-all text-sm font-bold">
+                  {integrationJob.job_id}
+                </code>
+              </div>
+              <span className="rounded-full bg-[#f1f1eb] px-3 py-2 text-xs font-bold">
+                Schema v{integrationJob.schema_version}
+              </span>
+            </div>
+            <p className="mt-3 text-xs text-muted">
+              Bij opnieuw klikken met dezelfde lijst blijft dit opdracht-ID
+              behouden. Een toekomstige server weigert dankzij dit ID een
+              dubbele uitvoering.
+            </p>
+          </div>
+
+          <div className="mt-5">
+            <h3 className="text-lg font-black">Voortgang per product</h3>
+            <p className="mt-1 text-sm text-muted">
+              Succes wordt pas getoond nadat de Python-agent dit expliciet heeft
+              teruggemeld.
+            </p>
+            <div className="mt-3 space-y-3">
+              {integrationJob.items.map((item) => (
+                <div
+                  key={item.item_id}
+                  className="grid gap-3 rounded-2xl border border-line bg-white p-4 sm:grid-cols-[1fr_auto] sm:items-center"
+                >
+                  <div>
+                    <strong className="block">{item.product_name}</strong>
+                    <p className="mt-1 text-sm text-muted">
+                      {item.variant} · {item.requested_quantity}×
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      {item.identifier_type}: {item.identifier}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-jumbo-soft px-3 py-2 text-xs font-black">
+                    {integrationItemStatusLabels[item.status]}
+                  </span>
+                  {(item.found_product_name || item.message) && (
+                    <div className="sm:col-span-2 rounded-xl bg-[#f3f3ee] p-3 text-sm">
+                      {item.found_product_name && (
+                        <p>
+                          Gevonden: <strong>{item.found_product_name}</strong>
+                        </p>
+                      )}
+                      {item.packaging_matches !== undefined && (
+                        <p>
+                          Verpakking:{" "}
+                          {item.packaging_matches ? "komt overeen" : "wijkt af"}
+                        </p>
+                      )}
+                      {item.added_quantity !== undefined && (
+                        <p>Toegevoegd: {item.added_quantity}×</p>
+                      )}
+                      {item.message && <p>{item.message}</p>}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {integrationJob.missing_identifiers.map((item) => (
+                <div
+                  key={item.product_id}
+                  className="grid gap-3 rounded-2xl border border-[#e2b4ae] bg-[#fff4f2] p-4 sm:grid-cols-[1fr_auto] sm:items-center"
+                >
+                  <div>
+                    <strong className="block">{item.product_name}</strong>
+                    <p className="mt-1 text-sm text-muted">
+                      {item.quantity}× · {item.reason}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-white px-3 py-2 text-xs font-black text-[#8e3025]">
+                    Handmatige controle
+                  </span>
+                </div>
+              ))}
+              {!integrationJob.items.length &&
+                !integrationJob.missing_identifiers.length && (
+                  <p className="rounded-xl bg-[#f3f3ee] p-4 text-sm text-muted">
+                    De actieve boodschappenlijst is leeg.
+                  </p>
+                )}
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-line bg-white p-5">
+            <h3 className="font-black">Beschikbare terugvalopties</h3>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <button
+                onClick={() =>
+                  downloadText(
+                    "jumbo-opdracht.json",
+                    JSON.stringify(integrationJob, null, 2),
+                    "application/json",
+                  )
+                }
+                className="touch-button rounded-xl bg-jumbo px-4 text-sm font-black"
+              >
+                Download opdracht JSON
+              </button>
+              <button
+                onClick={() =>
+                  downloadText(
+                    "jumbo-python-export.csv",
+                    jumboRowsToCsv(pythonExport.rows),
+                    "text/csv",
+                  )
+                }
+                className="touch-button rounded-xl border border-line bg-white px-4 text-sm font-black"
+              >
+                Download Python CSV
+              </button>
+              <button
+                onClick={() =>
+                  downloadText(
+                    "jumbo-identifiers.txt",
+                    jumboRowsToTxt(pythonExport.rows),
+                    "text/plain",
+                  )
+                }
+                className="touch-button rounded-xl border border-line bg-white px-4 text-sm font-black"
+              >
+                Download minimale TXT
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-xl bg-ink-deep p-4 text-sm text-white">
+            <strong>Veilige grens:</strong> een productcode garandeert geen
+            unieke Jumbo-match. De Python-agent moet product en verpakking
+            controleren en bij nul of meerdere resultaten stoppen.
+          </div>
+
+          <div className="mt-5">
+            <p className="text-xs font-black uppercase tracking-wider text-muted">
+              Ondersteunde toekomstige opdrachtstatussen
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {Object.values(integrationStatusLabels).map((label) => (
+                <span
+                  key={label}
+                  className="rounded-full border border-line bg-white px-3 py-2 text-xs font-bold"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
+        </Modal>
+      )}
       {confirmClear && (
         <ConfirmDialog
           title="Weet je zeker dat je de hele boodschappenlijst wilt leegmaken?"
@@ -1715,8 +2034,6 @@ function ShoppingList({
     </section>
   )
 }
-
-/** Klein formulier voor een handmatig aantal winkelverpakkingen. */
 function ListLineEditor({
   line,
   close,
@@ -1771,8 +2088,6 @@ function ListLineEditor({
     </Modal>
   )
 }
-
-/** Overzicht van producten die lokaal als aanwezig zijn gemarkeerd. */
 function Inventory({
   products,
   stock,
@@ -1799,8 +2114,10 @@ function Inventory({
                 key={product.id}
                 className="flex items-center gap-3 rounded-xl bg-[#f4f4ef] p-3"
               >
-                <img
-                  src={product.image}
+                <Image
+                  width={900}
+                  height={600}
+                  src={product.image || FALLBACK_IMAGE}
                   alt=""
                   className="h-12 w-12 rounded-lg object-cover"
                 />
@@ -1830,8 +2147,6 @@ function Inventory({
     </section>
   )
 }
-
-/** Lokale bezorgsamenvatting; er vindt bewust geen automatische Jumbo-overdracht plaats. */
 function Orders({ lines }: { lines: MergedCartLine[] }) {
   const delivery = new Date()
   delivery.setDate(delivery.getDate() + 3)
@@ -1881,6 +2196,7 @@ function Orders({ lines }: { lines: MergedCartLine[] }) {
 }
 
 type ProductFormState = {
+  recordId?: string
   id?: string
   name: string
   brand: string
@@ -1893,6 +2209,7 @@ type ProductFormState = {
   unit: string
   price: string
   image: string
+  imageRecordId?: string
   storage: StorageType
   preferred: boolean
   enabled: boolean
@@ -1900,11 +2217,13 @@ type ProductFormState = {
 }
 
 type RecipeFormState = {
+  recordId?: string
   id?: string
   name: string
   category: MenuCategory
   description: string
   image: string
+  imageRecordId?: string
   servings: string
   minutes: string
   notes: string
@@ -1912,7 +2231,7 @@ type RecipeFormState = {
   ingredients: RecipeIngredient[]
 }
 
-const emptyProductForm = (): ProductFormState => ({
+const emptyProductForm = (products: Product[] = []): ProductFormState => ({
   name: "",
   brand: "Jumbo",
   category: "Overig",
@@ -1923,7 +2242,7 @@ const emptyProductForm = (): ProductFormState => ({
   packageSize: "500",
   unit: "g",
   price: "2.49",
-  image: seedProducts[0].image,
+  image: products[0]?.image || "",
   storage: "Houdbaar",
   preferred: false,
   enabled: true,
@@ -1934,7 +2253,7 @@ const emptyRecipeForm = (products: Product[]): RecipeFormState => ({
   name: "",
   category: "Pasta & gerechten",
   description: "",
-  image: seedRecipes[0].image,
+  image: "",
   servings: "4",
   minutes: "30",
   notes: "",
@@ -1951,13 +2270,6 @@ const emptyRecipeForm = (products: Product[]): RecipeFormState => ({
       ]
     : [],
 })
-
-/**
- * Lokale beheeromgeving voor producten en recepten.
- *
- * Toevoegen en bewerken gebruiken hetzelfde formulier. Bij bewerken blijft de
- * interne `id` behouden, zodat alle bestaande verwijzingen geldig blijven.
- */
 function Admin({
   products,
   setProducts,
@@ -1980,8 +2292,9 @@ function Admin({
   const [tab, setTab] = useState<"producten" | "recepten" | "koppelingen">(
     "producten",
   )
-  const [productForm, setProductForm] =
-    useState<ProductFormState>(emptyProductForm)
+  const [productForm, setProductForm] = useState<ProductFormState>(() =>
+    emptyProductForm(products),
+  )
   const [recipeForm, setRecipeForm] = useState<RecipeFormState>(() =>
     emptyRecipeForm(products),
   )
@@ -1992,6 +2305,7 @@ function Admin({
   const editProduct = (product: Product) => {
     setError("")
     setProductForm({
+      recordId: product.recordId,
       id: product.id,
       name: product.name,
       brand: product.brand,
@@ -2004,6 +2318,7 @@ function Admin({
       unit: product.unit,
       price: String(product.price),
       image: product.image,
+      imageRecordId: product.imageRecordId,
       storage: product.storage,
       preferred: Boolean(product.preferred),
       enabled: product.enabled,
@@ -2011,9 +2326,7 @@ function Admin({
     })
     window.scrollTo({ top: 180, behavior: "smooth" })
   }
-
-  /** Valideert en bewaart een product zonder bij bewerken een nieuw record te maken. */
-  const saveProduct = (event: React.FormEvent) => {
+  const saveProduct = async (event: React.FormEvent) => {
     event.preventDefault()
     const packageSize = Number(productForm.packageSize)
     const price = Number(productForm.price)
@@ -2038,6 +2351,7 @@ function Admin({
       return
     }
     const saved: Product = {
+      recordId: productForm.recordId || "",
       id: productForm.id || `custom-${Date.now()}`,
       name: productForm.name.trim(),
       brand: productForm.brand.trim(),
@@ -2049,7 +2363,8 @@ function Admin({
       packageSize,
       unit: productForm.unit.trim(),
       price,
-      image: productForm.image.trim() || seedProducts[0].image,
+      image: productForm.image.trim(),
+      imageRecordId: productForm.imageRecordId,
       storage: productForm.storage,
       preferred: productForm.preferred,
       enabled: productForm.enabled,
@@ -2057,14 +2372,20 @@ function Admin({
         (id) => id !== productForm.id,
       ),
     }
+    const result = await saveProductAction(saved)
+    if (!result.ok || !result.recordId) {
+      setError(result.error || "Product opslaan is mislukt.")
+      return
+    }
+    const persisted = { ...saved, recordId: result.recordId }
     setProducts((current) =>
       productForm.id
         ? current.map((product) =>
-            product.id === productForm.id ? saved : product,
+            product.id === productForm.id ? persisted : product,
           )
-        : [...current, saved],
+        : [...current, persisted],
     )
-    setProductForm(emptyProductForm())
+    setProductForm(emptyProductForm(products))
     setError("")
     flash(
       productForm.id
@@ -2076,11 +2397,13 @@ function Admin({
   const editRecipe = (recipe: Recipe) => {
     setError("")
     setRecipeForm({
+      recordId: recipe.recordId,
       id: recipe.id,
       name: recipe.name,
       category: recipe.category,
       description: recipe.description,
       image: recipe.image,
+      imageRecordId: recipe.imageRecordId,
       servings: String(recipe.servings),
       minutes: String(recipe.minutes),
       notes: recipe.notes || "",
@@ -2092,17 +2415,11 @@ function Admin({
     })
     window.scrollTo({ top: 180, behavior: "smooth" })
   }
-
-  /** Slaat alle ingrediëntregels in hun huidige volgorde op onder dezelfde recept-ID. */
-  const saveRecipe = (event: React.FormEvent) => {
+  const saveRecipe = async (event: React.FormEvent) => {
     event.preventDefault()
     const servings = Number(recipeForm.servings)
     const minutes = Number(recipeForm.minutes)
-    if (
-      !recipeForm.name.trim() ||
-      !recipeForm.description.trim() ||
-      !recipeForm.image.trim()
-    ) {
+    if (!recipeForm.name.trim() || !recipeForm.description.trim()) {
       setError("Vul receptnaam, omschrijving en afbeelding in.")
       return
     }
@@ -2132,23 +2449,31 @@ function Admin({
       return
     }
     const saved: Recipe = {
+      recordId: recipeForm.recordId || "",
       id: recipeForm.id || `custom-recipe-${Date.now()}`,
       name: recipeForm.name.trim(),
       category: recipeForm.category,
       description: recipeForm.description.trim(),
       image: recipeForm.image.trim(),
+      imageRecordId: recipeForm.imageRecordId,
       servings,
       minutes,
       notes: recipeForm.notes.trim() || undefined,
       enabled: recipeForm.enabled,
       ingredients: recipeForm.ingredients,
     }
+    const result = await saveRecipeAction(saved)
+    if (!result.ok || !result.recordId) {
+      setError(result.error || "Recept opslaan is mislukt.")
+      return
+    }
+    const persisted = { ...saved, recordId: result.recordId }
     setRecipes((current) =>
       recipeForm.id
         ? current.map((recipe) =>
-            recipe.id === recipeForm.id ? saved : recipe,
+            recipe.id === recipeForm.id ? persisted : recipe,
           )
-        : [...current, saved],
+        : [...current, persisted],
     )
     setRecipeForm(emptyRecipeForm(products))
     setError("")
@@ -2215,7 +2540,7 @@ function Admin({
   return (
     <section>
       <PageTitle
-        eyebrow="Lokale beheeromgeving"
+        eyebrow="Gedeelde beheeromgeving"
         title="Producten en recepten beheren"
         sub="Bewerk catalogusrecords zonder stabiele interne ID's of bestaande koppelingen te verliezen."
       />
@@ -2498,7 +2823,7 @@ function Admin({
               {productForm.id && (
                 <button
                   type="button"
-                  onClick={() => setProductForm(emptyProductForm())}
+                  onClick={() => setProductForm(emptyProductForm(products))}
                   className="touch-button rounded-xl border border-line bg-white px-4 font-black"
                 >
                   Annuleren
@@ -2512,8 +2837,10 @@ function Admin({
                 key={product.id}
                 className="grid gap-4 rounded-2xl border border-line bg-white p-4 sm:grid-cols-[72px_1fr_auto] sm:items-center"
               >
-                <img
-                  src={product.image}
+                <Image
+                  width={900}
+                  height={600}
+                  src={product.image || FALLBACK_IMAGE}
                   alt=""
                   className="h-[72px] w-[72px] rounded-xl object-cover"
                 />
@@ -2860,8 +3187,10 @@ function Admin({
                 key={recipe.id}
                 className="grid gap-4 rounded-2xl border border-line bg-white p-4 sm:grid-cols-[72px_1fr_auto] sm:items-center"
               >
-                <img
-                  src={recipe.image}
+                <Image
+                  width={900}
+                  height={600}
+                  src={recipe.image || FALLBACK_IMAGE}
                   alt=""
                   className="h-[72px] w-[72px] rounded-xl object-cover"
                 />
@@ -2988,7 +3317,7 @@ function Admin({
                 ].join(
                   ", ",
                 )}. Het record wordt daarom veilig uitgeschakeld en niet verwijderd.`
-              : "Het product wordt definitief uit de lokale catalogus verwijderd. Recepten en voorraad worden niet aangepast."
+              : "Het product wordt definitief uit de gedeelde productdatabase verwijderd. Recepten en voorraad worden niet aangepast."
           }
           confirmLabel={
             productReferences.length ||
@@ -3000,13 +3329,22 @@ function Admin({
           }
           destructive
           cancel={() => setDeleteProduct(null)}
-          confirm={() => {
+          confirm={async () => {
             if (
               productReferences.length ||
               productAlternativeReferences.length ||
               productInCart ||
               productInStock
-            )
+            ) {
+              const result = await saveProductAction({
+                ...deleteProduct,
+                enabled: false,
+              })
+              if (!result.ok) {
+                setError(result.error || "Product deactiveren is mislukt.")
+                setDeleteProduct(null)
+                return
+              }
               setProducts((current) =>
                 current.map((product) =>
                   product.id === deleteProduct.id
@@ -3014,10 +3352,17 @@ function Admin({
                     : product,
                 ),
               )
-            else
+            } else {
+              const result = await deleteProductAction(deleteProduct.recordId)
+              if (!result.ok) {
+                setError(result.error || "Product verwijderen is mislukt.")
+                setDeleteProduct(null)
+                return
+              }
               setProducts((current) =>
                 current.filter((product) => product.id !== deleteProduct.id),
               )
+            }
             setDeleteProduct(null)
             flash(
               productReferences.length ||
@@ -3036,12 +3381,18 @@ function Admin({
           text={
             recipeInCart
               ? "Dit recept staat in de huidige winkelmand. Bij bevestigen wordt alleen deze geplande maaltijd mee uit de actieve winkelmand verwijderd; producten en andere recepten blijven behouden."
-              : "Het recept wordt uit de lokale receptdatabase verwijderd. Productrecords blijven behouden."
+              : "Het recept wordt uit de gedeelde receptdatabase verwijderd. Productrecords blijven behouden."
           }
           confirmLabel="Recept verwijderen"
           destructive
           cancel={() => setDeleteRecipe(null)}
-          confirm={() => {
+          confirm={async () => {
+            const result = await deleteRecipeAction(deleteRecipe.recordId)
+            if (!result.ok) {
+              setError(result.error || "Recept verwijderen is mislukt.")
+              setDeleteRecipe(null)
+              return
+            }
             setRecipes((current) =>
               current.filter((recipe) => recipe.id !== deleteRecipe.id),
             )
@@ -3060,8 +3411,6 @@ function Admin({
     </section>
   )
 }
-
-/** Herbruikbare bevestiging voor destructieve acties. */
 function ConfirmDialog({
   title,
   text,
@@ -3099,8 +3448,6 @@ function ConfirmDialog({
     </Modal>
   )
 }
-
-/** Gedeelde formulierkaart voor zowel toevoegen als bewerken. */
 function AdminForm({
   title,
   onSubmit,
@@ -3120,7 +3467,6 @@ function AdminForm({
     </form>
   )
 }
-/** Label en invoerveld worden samen gegroepeerd voor leesbaarheid en toegankelijkheid. */
 function Field({
   label,
   children,
@@ -3137,7 +3483,6 @@ function Field({
     </label>
   )
 }
-/** Grote plus/minbediening voor aantallen en personen. */
 function Counter({
   value,
   onMinus,
@@ -3179,7 +3524,7 @@ function Counter({
     </div>
   )
 }
-function Stat({ value, label }: { value: string | number label: string }) {
+function Stat({ value, label }: StatProps) {
   return (
     <div>
       <strong className="block text-xl sm:text-2xl">{value}</strong>
@@ -3187,7 +3532,7 @@ function Stat({ value, label }: { value: string | number label: string }) {
     </div>
   )
 }
-function InfoCard({ title, text }: { title: string text: string }) {
+function InfoCard({ title, text }: InfoCardProps) {
   return (
     <div className="rounded-2xl border border-line bg-white p-5">
       <span className="mb-4 block h-1.5 w-10 rounded-full bg-jumbo" />
@@ -3196,7 +3541,6 @@ function InfoCard({ title, text }: { title: string text: string }) {
     </div>
   )
 }
-/** Scrollbare dialoog die ook binnen een staande tabletviewport past. */
 function Modal({
   title,
   close,
@@ -3233,7 +3577,6 @@ function Modal({
     </div>
   )
 }
-/** Onderste schuiflade voor de winkelmand op smallere tablets en telefoons. */
 function Drawer({
   close,
   children,
@@ -3253,7 +3596,6 @@ function Drawer({
     </div>
   )
 }
-/** Herbruikbare lege toestand met optionele vervolgstap. */
 function Empty({
   title,
   text,
