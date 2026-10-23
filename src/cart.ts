@@ -1,5 +1,14 @@
 import type { CartItem, MergedCartLine, Product, Recipe } from "./types"
 
+/**
+ * Zet alle gekozen maaltijden, losse producten en AVG-combinaties om naar
+ * samengevoegde productregels. De functie verandert de brondata niet.
+ *
+ * Receptingrediënten worden geschaald met het aantal eters. Daarna delen we de
+ * totale behoefte door de verpakkingsgrootte en ronden we naar boven af. Deze
+ * eenvoudige frontendberekening kan later vervangen worden door een slimme
+ * backend die ook prijzen, restjes en voorraad meeweegt.
+ */
 export function mergeCart(
   cart: CartItem[],
   products: Product[],
@@ -7,6 +16,8 @@ export function mergeCart(
 ): MergedCartLine[] {
   const merged = new Map<string, MergedCartLine>()
   const productById = new Map(products.map((item) => [item.id, item]))
+
+  // Eén product-ID krijgt altijd één regel, ook als meerdere recepten het nodig hebben.
   const add = (
     productId: string,
     required: number,
@@ -17,6 +28,7 @@ export function mergeCart(
     if (!product) return
     const old = merged.get(productId)
     const total = (old?.required || 0) + required
+    // Er moet minstens één verpakking worden gekocht zodra er behoefte is.
     const packs = Math.max(
       1,
       Math.ceil(total / Math.max(product.packageSize, 1)),
@@ -32,6 +44,7 @@ export function mergeCart(
   }
 
   cart.forEach((item) => {
+    // Losse producten zijn al uitgedrukt in aantallen winkelverpakkingen.
     if (item.kind === "product") {
       const product = productById.get(item.productId)
       if (product)
@@ -43,6 +56,7 @@ export function mergeCart(
         )
       return
     }
+    // Een samengestelde AVG bestaat uit gekozen winkelproducten.
     if (item.kind === "avg") {
       item.productIds.forEach((id) => {
         const product = productById.get(id)
@@ -50,6 +64,7 @@ export function mergeCart(
       })
       return
     }
+    // Bij een recept worden overgeslagen ingrediënten genegeerd en vervangingen gevolgd.
     const recipe = recipes.find((entry) => entry.id === item.recipeId)
     if (!recipe) return
     recipe.ingredients.forEach((ingredient) => {

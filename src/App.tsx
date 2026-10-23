@@ -9,6 +9,9 @@ import type {
   MergedCartLine,
   Product,
   Recipe,
+  RecipeIngredient,
+  GroceryCategory,
+  StorageType,
 } from "./types"
 
 const NAV = [
@@ -39,6 +42,7 @@ const NAV_ICONS: Record<string, IconName> = {
   Beheer: "settings",
 }
 
+/** Kleine ingebouwde iconenset zodat acties overal visueel hetzelfde zijn. */
 function Icon({
   name,
   size = 20,
@@ -174,6 +178,10 @@ function Icon({
   )
 }
 
+/**
+ * Leest een waarde uit localStorage. Bij ontbrekende of beschadigde JSON wordt
+ * veilig de meegegeven standaardwaarde gebruikt, zodat de app kan blijven starten.
+ */
 function load<T>(key: string, fallback: T): T {
   try {
     const value = localStorage.getItem(key)
@@ -182,11 +190,17 @@ function load<T>(key: string, fallback: T): T {
     return fallback
   }
 }
+
+/** Formatteert bedragen overal op dezelfde Nederlandse manier. */
 const money = (value: number) =>
   new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" }).format(
     value,
   )
 
+/**
+ * Hoofdcomponent: beheert navigatie, catalogus, winkelmand en lokale opslag.
+ * Onderliggende pagina's ontvangen alleen de gegevens en acties die zij nodig hebben.
+ */
 export default function App() {
   const [page, setPage] = useState("Overzicht")
   const [products, setProducts] = useState<Product[]>(() =>
@@ -204,6 +218,11 @@ export default function App() {
   )
   const [stock, setStock] = useState<Record<string, number>>(() =>
     load("tb-stock-v3", {}),
+  )
+  // Per product-ID bewaren we een handmatig gekozen aantal verpakkingen.
+  // De waarde 0 betekent: alleen uit de actieve lijst verbergen.
+  const [lineOverrides, setLineOverrides] = useState<Record<string, number>>(
+    () => load("tb-list-overrides-v1", {}),
   )
 
   useEffect(
@@ -228,11 +247,29 @@ export default function App() {
     () => localStorage.setItem("tb-stock-v3", JSON.stringify(stock)),
     [stock],
   )
-
-  const lines = useMemo(
-    () => mergeCart(cart, products, recipes),
-    [cart, products, recipes],
+  useEffect(
+    () =>
+      localStorage.setItem(
+        "tb-list-overrides-v1",
+        JSON.stringify(lineOverrides),
+      ),
+    [lineOverrides],
   )
+
+  const lines = useMemo(() => {
+    const calculated = mergeCart(cart, products, recipes)
+    return calculated
+      .filter((line) => lineOverrides[line.product.id] !== 0)
+      .map((line) => {
+        const overriddenPacks = lineOverrides[line.product.id]
+        if (overriddenPacks === undefined) return line
+        return {
+          ...line,
+          packs: overriddenPacks,
+          estimatedPrice: overriddenPacks * line.product.price,
+        }
+      })
+  }, [cart, products, recipes, lineOverrides])
   const flash = (message: string) => {
     setNotice(message)
     window.setTimeout(() => setNotice(""), 2200)
@@ -266,6 +303,7 @@ export default function App() {
               recipes={recipes}
               cart={cart}
               setCart={setCart}
+              setLineOverrides={setLineOverrides}
               lines={lines}
               go={go}
               flash={flash}
@@ -278,6 +316,13 @@ export default function App() {
               setChecked={setChecked}
               stock={stock}
               setStock={setStock}
+              lineOverrides={lineOverrides}
+              setLineOverrides={setLineOverrides}
+              clearCart={() => {
+                setCart([])
+                setLineOverrides({})
+                setChecked({})
+              }}
               go={go}
               flash={flash}
             />
@@ -285,13 +330,16 @@ export default function App() {
           {page === "Voorraad" && (
             <Inventory products={products} stock={stock} setStock={setStock} />
           )}
-          {page === "Bestellingen" && <Orders lines={lines} flash={flash} />}
+          {page === "Bestellingen" && <Orders lines={lines} />}
           {page === "Beheer" && (
             <Admin
               products={products}
               setProducts={setProducts}
               recipes={recipes}
               setRecipes={setRecipes}
+              cart={cart}
+              setCart={setCart}
+              stock={stock}
               flash={flash}
             />
           )}
@@ -302,6 +350,7 @@ export default function App() {
   )
 }
 
+/** Vaste bovenbalk met snelle toegang tot het actieve lijstje. */
 function Header({
   go,
   itemCount,
@@ -350,6 +399,7 @@ function Header({
   )
 }
 
+/** Hoofdnavigatie voor tablet-liggend en desktop. */
 function Sidebar({ page, go }: { page: string go: (page: string) => void }) {
   return (
     <aside className="hidden w-60 shrink-0 px-5 py-7 md:block">
@@ -383,6 +433,7 @@ function Sidebar({ page, go }: { page: string go: (page: string) => void }) {
   )
 }
 
+/** Compacte navigatie voor smalle schermen en telefoons. */
 function MobileNav({ page, go }: { page: string go: (page: string) => void }) {
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 flex justify-around overflow-x-auto border-t border-line bg-white px-1 py-2 md:hidden">
@@ -402,6 +453,7 @@ function MobileNav({ page, go }: { page: string go: (page: string) => void }) {
   )
 }
 
+/** Gedeelde titelopbouw voor consistente pagina-hiërarchie. */
 function PageTitle({
   eyebrow,
   title,
@@ -424,6 +476,7 @@ function PageTitle({
   )
 }
 
+/** Samenvatting van de actieve gezinsbestelling. */
 function Dashboard({
   cart,
   lines,
@@ -501,11 +554,16 @@ function Dashboard({
   )
 }
 
+/**
+ * Visuele bestelzuil. Filters worden afgeleid van de centrale product- en
+ * receptcatalogus; kaarten zijn daardoor niet los in de interface vastgelegd.
+ */
 function Shop({
   products,
   recipes,
   cart,
   setCart,
+  setLineOverrides,
   lines,
   go,
   flash,
@@ -514,6 +572,7 @@ function Shop({
   recipes: Recipe[]
   cart: CartItem[]
   setCart: React.Dispatch<React.SetStateAction<CartItem[]>>
+  setLineOverrides: React.Dispatch<React.SetStateAction<Record<string, number>>>
   lines: MergedCartLine[]
   go: (page: string) => void
   flash: (message: string) => void
@@ -556,9 +615,22 @@ function Shop({
       replacements: {},
     }
     setCart((current) => [...current, item])
+    // Een eerder uit de lijst verborgen ingrediënt wordt bij een nieuwe keuze weer zichtbaar.
+    setLineOverrides((current) => {
+      const next = { ...current }
+      recipe.ingredients.forEach(
+        (ingredient) => delete next[ingredient.productId],
+      )
+      return next
+    })
     flash(`${recipe.name} toegevoegd voor ${servings} personen`)
   }
-  const addProduct = (product: Product) =>
+  const addProduct = (product: Product) => {
+    setLineOverrides((current) => {
+      const next = { ...current }
+      delete next[product.id]
+      return next
+    })
     setCart((current) => {
       const existing = current.find(
         (item) => item.kind === "product" && item.productId === product.id,
@@ -579,10 +651,11 @@ function Shop({
         },
       ]
     })
+  }
 
   return (
     <section>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid gap-6 min-[1100px]:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0">
           <div className="mb-6 overflow-hidden rounded-[28px] bg-ink-deep text-white">
             <div className="grid gap-6 p-6 sm:p-8 lg:grid-cols-[1fr_auto] lg:items-end">
@@ -727,7 +800,7 @@ function Shop({
               />
             )}
         </div>
-        <aside className="hidden xl:block">
+        <aside className="hidden min-[1100px]:block">
           <div className="sticky top-24">
             <CartPanel
               cart={cart}
@@ -743,7 +816,7 @@ function Shop({
       </div>
       <button
         onClick={() => setCartOpen(true)}
-        className="fixed bottom-[78px] left-4 right-4 z-30 flex items-center justify-between rounded-2xl bg-ink-deep px-5 py-4 text-white shadow-2xl md:bottom-5 xl:hidden"
+        className="fixed bottom-[78px] left-4 right-4 z-30 flex items-center justify-between rounded-2xl bg-ink-deep px-5 py-4 text-white shadow-2xl md:bottom-5 min-[1100px]:hidden"
       >
         <span className="flex items-center gap-3">
           <span className="grid h-10 w-10 place-items-center rounded-xl bg-jumbo text-ink">
@@ -783,6 +856,11 @@ function Shop({
           close={() => setWizardOpen(false)}
           onAdd={(item) => {
             setCart((current) => [...current, item])
+            setLineOverrides((current) => {
+              const next = { ...current }
+              item.productIds.forEach((id) => delete next[id])
+              return next
+            })
             setWizardOpen(false)
             flash("Jullie AVG-maaltijd staat in het mandje")
           }}
@@ -805,6 +883,7 @@ function Shop({
   )
 }
 
+/** Visuele receptkaart; een tweede tik opent de bestaande keuze om te bewerken. */
 function RecipeCard({
   recipe,
   selected,
@@ -861,6 +940,7 @@ function RecipeCard({
   )
 }
 
+/** Productkaart voor losse boodschappen met een groot tabletvriendelijk aanraakdoel. */
 function ProductCard({
   product,
   count,
@@ -911,6 +991,7 @@ function ProductCard({
   )
 }
 
+/** Zijmand met de gekozen bronitems voordat ze naar productregels worden samengevoegd. */
 function CartPanel({
   cart,
   setCart,
@@ -994,7 +1075,7 @@ function CartPanel({
                   <button
                     onClick={() => onEditMeal(item.id)}
                     aria-label="Maaltijd aanpassen"
-                    className="grid h-8 w-8 place-items-center rounded-lg bg-white"
+                    className="grid h-11 w-11 place-items-center rounded-xl bg-white"
                   >
                     <Icon name="edit" size={16} />
                   </button>
@@ -1011,7 +1092,7 @@ function CartPanel({
                       )
                     }
                     aria-label="Aantal verhogen"
-                    className="grid h-8 w-8 place-items-center rounded-lg bg-jumbo"
+                    className="grid h-11 w-11 place-items-center rounded-xl bg-jumbo"
                   >
                     <Icon name="plus" size={15} />
                   </button>
@@ -1019,7 +1100,7 @@ function CartPanel({
                 <button
                   onClick={() => remove(item.id)}
                   aria-label="Verwijderen"
-                  className="grid h-8 w-8 place-items-center rounded-lg bg-white text-[#8e3025]"
+                  className="grid h-11 w-11 place-items-center rounded-xl bg-white text-[#8e3025]"
                 >
                   <Icon name="trash" size={16} />
                 </button>
@@ -1048,6 +1129,7 @@ function CartPanel({
   )
 }
 
+/** Bewerkt alleen een geplande maaltijd, niet het onderliggende recept. */
 function MealEditor({
   item,
   recipes,
@@ -1125,7 +1207,7 @@ function MealEditor({
                             : [...item.skippedIngredientIds, ingredient.id],
                         })
                       }
-                      className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md border ${
+                      className={`mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-xl border ${
                         skipped
                           ? "border-ink bg-ink text-white"
                           : "border-[#c7c7bf]"
@@ -1186,6 +1268,7 @@ function MealEditor({
   )
 }
 
+/** Vierstapswizard die de tussenkeuzes bewaart wanneer de gebruiker teruggaat. */
 function AvgWizard({
   products,
   servings,
@@ -1349,12 +1432,22 @@ function AvgWizard({
   )
 }
 
+/**
+ * Toont de definitieve, samengevoegde boodschappenlijst.
+ *
+ * `lines` bevat al eventuele handmatige verpakkingsaantallen. Een aanpassing
+ * schrijft alleen naar `lineOverrides`; recepten en productrecords blijven
+ * daardoor onaangetast.
+ */
 function ShoppingList({
   lines,
   checked,
   setChecked,
   stock,
   setStock,
+  lineOverrides,
+  setLineOverrides,
+  clearCart,
   go,
   flash,
 }: {
@@ -1363,10 +1456,43 @@ function ShoppingList({
   setChecked: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
   stock: Record<string, number>
   setStock: React.Dispatch<React.SetStateAction<Record<string, number>>>
+  lineOverrides: Record<string, number>
+  setLineOverrides: React.Dispatch<React.SetStateAction<Record<string, number>>>
+  clearCart: () => void
   go: (page: string) => void
   flash: (message: string) => void
 }) {
+  const [editingLine, setEditingLine] = useState<MergedCartLine | null>(null)
+  const [confirmClear, setConfirmClear] = useState(false)
   const categories = [...new Set(lines.map((line) => line.product.category))]
+
+  /** Exporteert precies de zichtbare, handmatig aangepaste lijst naar CSV. */
+  const exportCsv = () => {
+    const rows = [
+      "Categorie,Product,Merk,Verpakkingen,Verpakking,Prijs",
+      ...lines.map((line) =>
+        [
+          line.product.category,
+          line.product.name,
+          line.product.brand,
+          line.packs,
+          line.product.packageLabel,
+          line.estimatedPrice,
+        ]
+          .map((value) => `"${String(value).replaceAll('"', '""')}"`)
+          .join(","),
+      ),
+    ]
+    const link = document.createElement("a")
+    link.href = URL.createObjectURL(
+      new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" }),
+    )
+    link.download = "boodschappenlijst.csv"
+    link.click()
+    URL.revokeObjectURL(link.href)
+    flash("CSV-bestand gedownload")
+  }
+
   const copy = async () => {
     await navigator.clipboard.writeText(
       lines
@@ -1377,6 +1503,14 @@ function ShoppingList({
     )
     flash("Boodschappenlijst gekopieerd")
   }
+
+  /** Past uitsluitend het te kopen aantal verpakkingen van deze bestelling aan. */
+  const setPacks = (line: MergedCartLine, packs: number) =>
+    setLineOverrides((current) => ({
+      ...current,
+      [line.product.id]: Math.max(0, packs),
+    }))
+
   return (
     <section>
       <PageTitle
@@ -1385,37 +1519,47 @@ function ShoppingList({
         sub={`${lines.length} unieke producten, samengevoegd vanuit alle gekozen maaltijden en losse boodschappen.`}
       />
       <div className="mb-5 rounded-2xl border border-[#ead15a] bg-jumbo-soft p-4 text-sm">
-        <strong>Handmatige Jumbo-overdracht.</strong> Prijzen en productcodes
-        zijn voorbeeldgegevens; er wordt geen echte winkelwagen aangemaakt.
+        <strong>Handmatige Jumbo-overdracht.</strong> De berekende behoefte
+        blijft zichtbaar, terwijl je zelf bepaalt hoeveel verpakkingen je
+        werkelijk koopt.
       </div>
-      <div className="mb-6 flex flex-wrap gap-2">
+      <div className="mb-6 flex flex-wrap gap-3">
         <button
           onClick={() =>
             setChecked(
               Object.fromEntries(lines.map((line) => [line.product.id, true])),
             )
           }
-          className="rounded-xl bg-jumbo px-4 py-2.5 text-sm font-black"
+          className="touch-button rounded-xl bg-jumbo px-5 py-3 text-sm font-black"
         >
           Alles controleren
         </button>
         <button
           onClick={copy}
-          className="rounded-xl border border-line bg-white px-4 py-2.5 text-sm font-black"
+          disabled={!lines.length}
+          className="touch-button rounded-xl border border-line bg-white px-5 py-3 text-sm font-black disabled:opacity-40"
         >
           Lijst kopiëren
         </button>
         <button
-          onClick={() => flash("CSV-export voorbereid in dit prototype")}
-          className="rounded-xl border border-line bg-white px-4 py-2.5 text-sm font-black"
+          onClick={exportCsv}
+          disabled={!lines.length}
+          className="touch-button rounded-xl border border-line bg-white px-5 py-3 text-sm font-black disabled:opacity-40"
         >
           Exporteer CSV
+        </button>
+        <button
+          onClick={() => setConfirmClear(true)}
+          disabled={!lines.length}
+          className="touch-button ml-auto flex items-center gap-2 rounded-xl bg-[#982f24] px-5 py-3 text-sm font-black text-white disabled:opacity-40"
+        >
+          <Icon name="trash" size={18} /> Lijst leegmaken
         </button>
       </div>
       {!lines.length ? (
         <Empty
-          title="Je lijst is nog leeg"
-          text="Kies eerst maaltijden en producten in de bestelzuil."
+          title="Je boodschappenlijst is leeg"
+          text="Ga naar Boodschappen om nieuwe maaltijden en producten toe te voegen. Recepten, voorraad en eerdere bestellingen zijn behouden."
           action="Start met kiezen"
           onClick={() => go("Boodschappen")}
         />
@@ -1425,7 +1569,7 @@ function ShoppingList({
             key={category}
             className="mb-5 overflow-hidden rounded-2xl border border-line bg-white"
           >
-            <div className="flex items-center justify-between bg-[#f1f1eb] px-5 py-3">
+            <div className="flex items-center justify-between bg-[#f1f1eb] px-5 py-4">
               <h2 className="font-black">{category}</h2>
               <span className="text-sm text-muted">
                 {
@@ -1439,10 +1583,12 @@ function ShoppingList({
               .map((line) => {
                 const have = stock[line.product.id] || 0
                 const buy = Math.max(0, line.packs - have)
+                const manuallyAdjusted =
+                  lineOverrides[line.product.id] !== undefined
                 return (
                   <div
                     key={line.product.id}
-                    className="grid gap-3 border-t border-line p-4 first:border-0 sm:grid-cols-[auto_60px_1fr_auto] sm:items-center"
+                    className="grid gap-4 border-t border-line p-4 first:border-0 sm:grid-cols-[48px_72px_1fr] lg:grid-cols-[48px_72px_1fr_auto] lg:items-center"
                   >
                     <button
                       onClick={() =>
@@ -1451,36 +1597,73 @@ function ShoppingList({
                           [line.product.id]: !value[line.product.id],
                         }))
                       }
-                      className={`grid h-7 w-7 place-items-center rounded-lg border ${
+                      aria-label={`${line.product.name} controleren`}
+                      className={`grid h-12 w-12 place-items-center rounded-xl border ${
                         checked[line.product.id]
                           ? "border-jumbo bg-jumbo"
                           : "border-[#c8c8c0]"
                       }`}
                     >
                       {checked[line.product.id] && (
-                        <Icon name="check" size={16} />
+                        <Icon name="check" size={20} />
                       )}
                     </button>
                     <img
                       src={line.product.image}
                       alt=""
-                      className="h-14 w-14 rounded-xl object-cover"
+                      className="h-[72px] w-[72px] rounded-xl object-cover"
                     />
-                    <div>
-                      <strong>
+                    <div className="min-w-0">
+                      <strong className="block text-base">
                         {line.product.brand} {line.product.name}
                       </strong>
-                      <p className="text-xs text-muted">
-                        Nodig voor: {line.sources.join(", ")} ·{" "}
-                        {Math.round(line.required * 10) / 10} {line.unit}
+                      <p className="mt-1 text-sm text-muted">
+                        Berekend: {Math.round(line.required * 10) / 10}{" "}
+                        {line.unit} · {line.product.packageLabel}
                       </p>
+                      <p className="mt-1 text-xs text-muted">
+                        Nodig voor: {line.sources.join(", ")}
+                      </p>
+                      {manuallyAdjusted && (
+                        <span className="mt-2 inline-flex rounded-full bg-jumbo-soft px-2.5 py-1 text-xs font-black">
+                          Handmatig aangepast
+                        </span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-3 sm:text-right">
-                      <div>
-                        <strong className="block">{buy}× kopen</strong>
-                        <small className="text-muted">
-                          {money(buy * line.product.price)}
-                        </small>
+                    <div className="col-span-full flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4 lg:col-span-1 lg:border-0 lg:pt-0">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setPacks(line, line.packs - 1)}
+                          aria-label="Eén verpakking minder"
+                          className="touch-icon border border-line bg-white"
+                        >
+                          <Icon name="minus" size={20} />
+                        </button>
+                        <div className="min-w-20 text-center">
+                          <strong className="block text-xl">{buy}×</strong>
+                          <small className="text-muted">kopen</small>
+                        </div>
+                        <button
+                          onClick={() => setPacks(line, line.packs + 1)}
+                          aria-label="Eén verpakking meer"
+                          className="touch-icon bg-jumbo"
+                        >
+                          <Icon name="plus" size={20} />
+                        </button>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setEditingLine(line)}
+                          className="touch-button flex items-center gap-2 rounded-xl border border-line bg-white px-4 text-sm font-black"
+                        >
+                          <Icon name="edit" size={17} /> Bewerk
+                        </button>
+                        <button
+                          onClick={() => setPacks(line, 0)}
+                          className="touch-button flex items-center gap-2 rounded-xl border border-[#e2b4ae] bg-[#fff4f2] px-4 text-sm font-black text-[#8e3025]"
+                        >
+                          <Icon name="trash" size={17} /> Verwijder
+                        </button>
                       </div>
                       <button
                         onClick={() =>
@@ -1489,8 +1672,10 @@ function ShoppingList({
                             [line.product.id]: have ? 0 : 1,
                           }))
                         }
-                        className={`rounded-lg border px-3 py-2 text-xs font-black ${
-                          have ? "border-jumbo bg-jumbo-soft" : "border-line"
+                        className={`touch-button rounded-xl border px-4 text-sm font-black ${
+                          have
+                            ? "border-jumbo bg-jumbo-soft"
+                            : "border-line bg-white"
                         }`}
                       >
                         {have ? "1 in voorraad" : "Heb ik al"}
@@ -1502,10 +1687,92 @@ function ShoppingList({
           </div>
         ))
       )}
+      {editingLine && (
+        <ListLineEditor
+          line={editingLine}
+          close={() => setEditingLine(null)}
+          save={(packs) => {
+            setPacks(editingLine, packs)
+            setEditingLine(null)
+            flash("Aantal verpakkingen aangepast")
+          }}
+        />
+      )}
+      {confirmClear && (
+        <ConfirmDialog
+          title="Weet je zeker dat je de hele boodschappenlijst wilt leegmaken?"
+          text="Alle producten en geselecteerde items uit de huidige lijst worden verwijderd. Je productdatabase, recepten, voorraad en bestelgeschiedenis blijven behouden."
+          confirmLabel="Ja, lijst leegmaken"
+          destructive
+          cancel={() => setConfirmClear(false)}
+          confirm={() => {
+            clearCart()
+            setConfirmClear(false)
+            flash("De actieve boodschappenlijst is leeggemaakt")
+          }}
+        />
+      )}
     </section>
   )
 }
 
+/** Klein formulier voor een handmatig aantal winkelverpakkingen. */
+function ListLineEditor({
+  line,
+  close,
+  save,
+}: {
+  line: MergedCartLine
+  close: () => void
+  save: (packs: number) => void
+}) {
+  const [packs, setPacks] = useState(line.packs)
+  return (
+    <Modal title={`${line.product.name} aanpassen`} close={close}>
+      <div className="rounded-2xl bg-[#f3f3ee] p-4">
+        <p className="text-sm text-muted">Berekende behoefte</p>
+        <strong className="mt-1 block text-lg">
+          {Math.round(line.required * 10) / 10} {line.unit}
+        </strong>
+        <p className="mt-1 text-sm text-muted">
+          Verpakking: {line.product.packageLabel}
+        </p>
+      </div>
+      <Field label="Aantal verpakkingen dat je wilt kopen">
+        <input
+          type="number"
+          min="0"
+          step="1"
+          value={packs}
+          onChange={(event) =>
+            setPacks(Math.max(0, Number(event.target.value)))
+          }
+          className="form-input"
+        />
+      </Field>
+      <p className="mt-3 text-sm text-muted">
+        Deze wijziging geldt alleen voor de huidige bestelling. Het recept en
+        product blijven ongewijzigd.
+      </p>
+      <div className="mt-6 flex justify-end gap-3">
+        <button
+          onClick={close}
+          className="touch-button rounded-xl border border-line bg-white px-5 font-black"
+        >
+          Annuleren
+        </button>
+        <button
+          onClick={() => save(Math.floor(packs))}
+          className="touch-button rounded-xl bg-jumbo px-5 font-black"
+        >
+          Opslaan
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+/** Overzicht van producten die lokaal als aanwezig zijn gemarkeerd. */
 function Inventory({
   products,
   stock,
@@ -1564,13 +1831,8 @@ function Inventory({
   )
 }
 
-function Orders({
-  lines,
-  flash,
-}: {
-  lines: MergedCartLine[]
-  flash: (message: string) => void
-}) {
+/** Lokale bezorgsamenvatting; er vindt bewust geen automatische Jumbo-overdracht plaats. */
+function Orders({ lines }: { lines: MergedCartLine[] }) {
   const delivery = new Date()
   delivery.setDate(delivery.getDate() + 3)
   return (
@@ -1609,124 +1871,363 @@ function Orders({
             Een officiële Jumbo-winkelwagen-API is niet beschikbaar. Deze app
             doet daarom geen onterechte belofte van automatische overdracht.
           </p>
-          <button
-            onClick={() => flash("Voorbeeldbestelling staat al gepland")}
-            className="mt-5 rounded-xl bg-jumbo px-4 py-3 text-sm font-black"
-          >
-            Nieuwe bestelling
-          </button>
+          <div className="mt-5 rounded-xl bg-jumbo-soft px-4 py-3 text-sm font-bold text-ink">
+            De huidige voorbeeldbestelling staat al gepland.
+          </div>
         </div>
       </div>
     </section>
   )
 }
 
+type ProductFormState = {
+  id?: string
+  name: string
+  brand: string
+  category: GroceryCategory
+  menuCategory: MenuCategory
+  code: string
+  ean: string
+  packageLabel: string
+  packageSize: string
+  unit: string
+  price: string
+  image: string
+  storage: StorageType
+  preferred: boolean
+  enabled: boolean
+  alternativeIds: string[]
+}
+
+type RecipeFormState = {
+  id?: string
+  name: string
+  category: MenuCategory
+  description: string
+  image: string
+  servings: string
+  minutes: string
+  notes: string
+  enabled: boolean
+  ingredients: RecipeIngredient[]
+}
+
+const emptyProductForm = (): ProductFormState => ({
+  name: "",
+  brand: "Jumbo",
+  category: "Overig",
+  menuCategory: "Dagelijkse boodschappen",
+  code: "",
+  ean: "",
+  packageLabel: "Pak 500 g",
+  packageSize: "500",
+  unit: "g",
+  price: "2.49",
+  image: seedProducts[0].image,
+  storage: "Houdbaar",
+  preferred: false,
+  enabled: true,
+  alternativeIds: [],
+})
+
+const emptyRecipeForm = (products: Product[]): RecipeFormState => ({
+  name: "",
+  category: "Pasta & gerechten",
+  description: "",
+  image: seedRecipes[0].image,
+  servings: "4",
+  minutes: "30",
+  notes: "",
+  enabled: true,
+  ingredients: products[0]
+    ? [
+        {
+          id: `ingredient-${Date.now()}`,
+          name: products[0].name,
+          productId: products[0].id,
+          quantity: 1,
+          unit: products[0].unit,
+        },
+      ]
+    : [],
+})
+
+/**
+ * Lokale beheeromgeving voor producten en recepten.
+ *
+ * Toevoegen en bewerken gebruiken hetzelfde formulier. Bij bewerken blijft de
+ * interne `id` behouden, zodat alle bestaande verwijzingen geldig blijven.
+ */
 function Admin({
   products,
   setProducts,
   recipes,
   setRecipes,
+  cart,
+  setCart,
+  stock,
   flash,
 }: {
   products: Product[]
   setProducts: React.Dispatch<React.SetStateAction<Product[]>>
   recipes: Recipe[]
   setRecipes: React.Dispatch<React.SetStateAction<Recipe[]>>
+  cart: CartItem[]
+  setCart: React.Dispatch<React.SetStateAction<CartItem[]>>
+  stock: Record<string, number>
   flash: (message: string) => void
 }) {
   const [tab, setTab] = useState<"producten" | "recepten" | "koppelingen">(
     "producten",
   )
-  const [productForm, setProductForm] = useState({
-    name: "",
-    brand: "Jumbo",
-    menuCategory: "Dagelijkse boodschappen" as MenuCategory,
-    packageLabel: "Pak 500 g",
-    price: "2.49",
-    code: "",
-  })
-  const [recipeForm, setRecipeForm] = useState({
-    name: "",
-    category: "Pasta & gerechten" as MenuCategory,
-    productId: products[0]?.id || "",
-    quantity: "500",
-    unit: "g",
-  })
-  const addProduct = (event: React.FormEvent) => {
+  const [productForm, setProductForm] =
+    useState<ProductFormState>(emptyProductForm)
+  const [recipeForm, setRecipeForm] = useState<RecipeFormState>(() =>
+    emptyRecipeForm(products),
+  )
+  const [error, setError] = useState("")
+  const [deleteProduct, setDeleteProduct] = useState<Product | null>(null)
+  const [deleteRecipe, setDeleteRecipe] = useState<Recipe | null>(null)
+
+  const editProduct = (product: Product) => {
+    setError("")
+    setProductForm({
+      id: product.id,
+      name: product.name,
+      brand: product.brand,
+      category: product.category,
+      menuCategory: product.menuCategory,
+      code: product.code || "",
+      ean: product.ean || "",
+      packageLabel: product.packageLabel,
+      packageSize: String(product.packageSize),
+      unit: product.unit,
+      price: String(product.price),
+      image: product.image,
+      storage: product.storage,
+      preferred: Boolean(product.preferred),
+      enabled: product.enabled,
+      alternativeIds: product.alternativeIds || [],
+    })
+    window.scrollTo({ top: 180, behavior: "smooth" })
+  }
+
+  /** Valideert en bewaart een product zonder bij bewerken een nieuw record te maken. */
+  const saveProduct = (event: React.FormEvent) => {
     event.preventDefault()
-    if (!productForm.name) return
-    const image =
-      seedProducts.find(
-        (product) => product.menuCategory === productForm.menuCategory,
-      )?.image || seedProducts[0].image
-    const next: Product = {
-      id: `custom-${Date.now()}`,
-      name: productForm.name,
-      brand: productForm.brand,
-      category:
-        productForm.menuCategory === "Drinken"
-          ? "Dranken"
-          : productForm.menuCategory === "Snacks"
-            ? "Snacks"
-            : productForm.menuCategory === "Huishouden"
-              ? "Huishouden"
-              : "Overig",
+    const packageSize = Number(productForm.packageSize)
+    const price = Number(productForm.price)
+    if (
+      !productForm.name.trim() ||
+      !productForm.brand.trim() ||
+      !productForm.packageLabel.trim() ||
+      !productForm.unit.trim()
+    ) {
+      setError("Vul productnaam, merk, verpakking en eenheid in.")
+      return
+    }
+    if (
+      !Number.isFinite(packageSize) ||
+      packageSize <= 0 ||
+      !Number.isFinite(price) ||
+      price < 0
+    ) {
+      setError(
+        "Verpakkingsgrootte moet groter zijn dan nul en de prijs mag niet negatief zijn.",
+      )
+      return
+    }
+    const saved: Product = {
+      id: productForm.id || `custom-${Date.now()}`,
+      name: productForm.name.trim(),
+      brand: productForm.brand.trim(),
+      category: productForm.category,
       menuCategory: productForm.menuCategory,
-      code: productForm.code,
-      packageLabel: productForm.packageLabel,
-      packageSize: 1,
-      unit: "pak",
-      price: Number(productForm.price) || 0,
-      image,
-      storage: "Houdbaar",
-      enabled: true,
+      code: productForm.code.trim() || undefined,
+      ean: productForm.ean.trim() || undefined,
+      packageLabel: productForm.packageLabel.trim(),
+      packageSize,
+      unit: productForm.unit.trim(),
+      price,
+      image: productForm.image.trim() || seedProducts[0].image,
+      storage: productForm.storage,
+      preferred: productForm.preferred,
+      enabled: productForm.enabled,
+      alternativeIds: productForm.alternativeIds.filter(
+        (id) => id !== productForm.id,
+      ),
     }
-    setProducts((current) => [...current, next])
-    setProductForm({ ...productForm, name: "", code: "" })
-    flash("Product toegevoegd en direct beschikbaar in het menu")
+    setProducts((current) =>
+      productForm.id
+        ? current.map((product) =>
+            product.id === productForm.id ? saved : product,
+          )
+        : [...current, saved],
+    )
+    setProductForm(emptyProductForm())
+    setError("")
+    flash(
+      productForm.id
+        ? "Productwijzigingen opgeslagen"
+        : "Product toegevoegd aan de catalogus",
+    )
   }
-  const addRecipe = (event: React.FormEvent) => {
+
+  const editRecipe = (recipe: Recipe) => {
+    setError("")
+    setRecipeForm({
+      id: recipe.id,
+      name: recipe.name,
+      category: recipe.category,
+      description: recipe.description,
+      image: recipe.image,
+      servings: String(recipe.servings),
+      minutes: String(recipe.minutes),
+      notes: recipe.notes || "",
+      enabled: recipe.enabled,
+      ingredients: recipe.ingredients.map((ingredient) => ({
+        ...ingredient,
+        alternativeProductIds: ingredient.alternativeProductIds || [],
+      })),
+    })
+    window.scrollTo({ top: 180, behavior: "smooth" })
+  }
+
+  /** Slaat alle ingrediëntregels in hun huidige volgorde op onder dezelfde recept-ID. */
+  const saveRecipe = (event: React.FormEvent) => {
     event.preventDefault()
-    if (!recipeForm.name || !recipeForm.productId) return
-    const linked = products.find(
-      (product) => product.id === recipeForm.productId,
-    )!
-    const next: Recipe = {
-      id: `custom-recipe-${Date.now()}`,
-      name: recipeForm.name,
-      category: recipeForm.category,
-      description: "Zelf toegevoegd gezinsrecept.",
-      image: linked.image,
-      servings: 4,
-      minutes: 30,
-      enabled: true,
-      ingredients: [
-        {
-          id: `ingredient-${Date.now()}`,
-          name: linked.name,
-          productId: linked.id,
-          quantity: Number(recipeForm.quantity) || 1,
-          unit: recipeForm.unit,
-        },
-      ],
+    const servings = Number(recipeForm.servings)
+    const minutes = Number(recipeForm.minutes)
+    if (
+      !recipeForm.name.trim() ||
+      !recipeForm.description.trim() ||
+      !recipeForm.image.trim()
+    ) {
+      setError("Vul receptnaam, omschrijving en afbeelding in.")
+      return
     }
-    setRecipes((current) => [...current, next])
-    setRecipeForm({ ...recipeForm, name: "" })
-    flash("Recept toegevoegd en direct beschikbaar in het menu")
+    if (
+      !Number.isFinite(servings) ||
+      servings < 1 ||
+      !Number.isFinite(minutes) ||
+      minutes < 1 ||
+      recipeForm.ingredients.length === 0
+    ) {
+      setError(
+        "Een recept heeft minimaal één eter, één minuut en één ingrediënt nodig.",
+      )
+      return
+    }
+    if (
+      recipeForm.ingredients.some(
+        (ingredient) =>
+          !ingredient.productId ||
+          ingredient.quantity <= 0 ||
+          !ingredient.unit.trim(),
+      )
+    ) {
+      setError(
+        "Controleer de productkoppeling, hoeveelheid en eenheid van ieder ingrediënt.",
+      )
+      return
+    }
+    const saved: Recipe = {
+      id: recipeForm.id || `custom-recipe-${Date.now()}`,
+      name: recipeForm.name.trim(),
+      category: recipeForm.category,
+      description: recipeForm.description.trim(),
+      image: recipeForm.image.trim(),
+      servings,
+      minutes,
+      notes: recipeForm.notes.trim() || undefined,
+      enabled: recipeForm.enabled,
+      ingredients: recipeForm.ingredients,
+    }
+    setRecipes((current) =>
+      recipeForm.id
+        ? current.map((recipe) =>
+            recipe.id === recipeForm.id ? saved : recipe,
+          )
+        : [...current, saved],
+    )
+    setRecipeForm(emptyRecipeForm(products))
+    setError("")
+    flash(
+      recipeForm.id
+        ? "Receptwijzigingen opgeslagen"
+        : "Recept toegevoegd aan het menu",
+    )
   }
+
+  const updateIngredient = (index: number, patch: Partial<RecipeIngredient>) =>
+    setRecipeForm((current) => ({
+      ...current,
+      ingredients: current.ingredients.map((ingredient, itemIndex) =>
+        itemIndex === index ? { ...ingredient, ...patch } : ingredient,
+      ),
+    }))
+
+  const moveIngredient = (index: number, direction: -1 | 1) => {
+    const target = index + direction
+    if (target < 0 || target >= recipeForm.ingredients.length) return
+    setRecipeForm((current) => {
+      const ingredients = [...current.ingredients]
+      ;[ingredients[index], ingredients[target]] = [
+        ingredients[target],
+        ingredients[index],
+      ]
+      return { ...current, ingredients }
+    })
+  }
+
+  const productReferences = deleteProduct
+    ? recipes.filter((recipe) =>
+        recipe.ingredients.some(
+          (ingredient) =>
+            ingredient.productId === deleteProduct.id ||
+            ingredient.alternativeProductIds?.includes(deleteProduct.id),
+        ),
+      )
+    : []
+  const productAlternativeReferences = deleteProduct
+    ? products.filter((product) =>
+        product.alternativeIds?.includes(deleteProduct.id),
+      )
+    : []
+  const productInCart = deleteProduct
+    ? cart.some((item) =>
+        item.kind === "product"
+          ? item.productId === deleteProduct.id
+          : item.kind === "avg"
+            ? item.productIds.includes(deleteProduct.id)
+            : false,
+      )
+    : false
+  const productInStock = deleteProduct
+    ? Boolean(stock[deleteProduct.id])
+    : false
+  const recipeInCart = deleteRecipe
+    ? cart.some(
+        (item) => item.kind === "meal" && item.recipeId === deleteRecipe.id,
+      )
+    : false
+
   return (
     <section>
       <PageTitle
         eyebrow="Lokale beheeromgeving"
         title="Producten en recepten beheren"
-        sub="Beheer herbruikbare productrecords en recepten. Deze gegevens zijn voorbereid op een latere database, maar staan nu alleen in deze browser."
+        sub="Bewerk catalogusrecords zonder stabiele interne ID's of bestaande koppelingen te verliezen."
       />
-      <div className="mb-6 flex gap-2 overflow-x-auto">
+      <div className="mb-6 flex gap-3 overflow-x-auto pb-1">
         {(["producten", "recepten", "koppelingen"] as const).map((item) => (
           <button
             key={item}
-            onClick={() => setTab(item)}
-            className={`rounded-xl px-4 py-2.5 text-sm font-black capitalize ${
+            onClick={() => {
+              setTab(item)
+              setError("")
+            }}
+            className={`touch-button rounded-xl px-5 text-sm font-black capitalize ${
               tab === item ? "bg-jumbo" : "border border-line bg-white"
             }`}
           >
@@ -1734,23 +2235,37 @@ function Admin({
           </button>
         ))}
       </div>
+      {error && (
+        <div className="mb-5 rounded-xl border border-[#e2b4ae] bg-[#fff4f2] p-4 text-sm font-bold text-[#8e3025]">
+          {error}
+        </div>
+      )}
+
       {tab === "producten" && (
-        <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
-          <AdminForm title="Nieuw product" onSubmit={addProduct}>
-            <Field label="Productnaam">
+        <div className="grid gap-6 xl:grid-cols-[420px_1fr]">
+          <AdminForm
+            title={productForm.id ? "Product bewerken" : "Nieuw product"}
+            onSubmit={saveProduct}
+          >
+            {productForm.id && (
+              <p className="rounded-xl bg-jumbo-soft p-3 text-xs">
+                <strong>Interne ID blijft behouden:</strong> {productForm.id}
+              </p>
+            )}
+            <Field label="Productnaam *">
               <input
                 required
                 value={productForm.name}
                 onChange={(event) =>
                   setProductForm({ ...productForm, name: event.target.value })
                 }
-                placeholder="Bijv. appelsap"
                 className="form-input"
               />
             </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Merk">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Merk *">
                 <input
+                  required
                   value={productForm.brand}
                   onChange={(event) =>
                     setProductForm({
@@ -1764,6 +2279,7 @@ function Admin({
               <Field label="Prijs">
                 <input
                   type="number"
+                  min="0"
                   step="0.01"
                   value={productForm.price}
                   onChange={(event) =>
@@ -1776,24 +2292,74 @@ function Admin({
                 />
               </Field>
             </div>
-            <Field label="Menucategorie">
-              <select
-                value={productForm.menuCategory}
-                onChange={(event) =>
-                  setProductForm({
-                    ...productForm,
-                    menuCategory: event.target.value as MenuCategory,
-                  })
-                }
-                className="form-input"
-              >
-                {menuCategories.map((category) => (
-                  <option key={category.name}>{category.name}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Verpakking">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Boodschappencategorie">
+                <select
+                  value={productForm.category}
+                  onChange={(event) =>
+                    setProductForm({
+                      ...productForm,
+                      category: event.target.value as GroceryCategory,
+                    })
+                  }
+                  className="form-input"
+                >
+                  {([
+                    "Groente en fruit",
+                    "Aardappelen, rijst en pasta",
+                    "Vlees en vis",
+                    "Zuivel, kaas en eieren",
+                    "Brood en beleg",
+                    "Dranken",
+                    "Snacks",
+                    "Huishouden",
+                    "Overig",
+                  ] as GroceryCategory[]).map((category) => (
+                    <option key={category}>{category}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Menucategorie">
+                <select
+                  value={productForm.menuCategory}
+                  onChange={(event) =>
+                    setProductForm({
+                      ...productForm,
+                      menuCategory: event.target.value as MenuCategory,
+                    })
+                  }
+                  className="form-input"
+                >
+                  {menuCategories.map((category) => (
+                    <option key={category.name}>{category.name}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Jumbo-productcode">
+                <input
+                  value={productForm.code}
+                  onChange={(event) =>
+                    setProductForm({ ...productForm, code: event.target.value })
+                  }
+                  className="form-input"
+                />
+              </Field>
+              <Field label="EAN">
+                <input
+                  inputMode="numeric"
+                  value={productForm.ean}
+                  onChange={(event) =>
+                    setProductForm({ ...productForm, ean: event.target.value })
+                  }
+                  className="form-input"
+                />
+              </Field>
+            </div>
+            <Field label="Verpakkingsomschrijving *">
               <input
+                required
                 value={productForm.packageLabel}
                 onChange={(event) =>
                   setProductForm({
@@ -1804,164 +2370,547 @@ function Admin({
                 className="form-input"
               />
             </Field>
-            <Field label="Jumbo-code of EAN (optioneel)">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Nettohoeveelheid *">
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={productForm.packageSize}
+                  onChange={(event) =>
+                    setProductForm({
+                      ...productForm,
+                      packageSize: event.target.value,
+                    })
+                  }
+                  className="form-input"
+                />
+              </Field>
+              <Field label="Eenheid *">
+                <input
+                  required
+                  value={productForm.unit}
+                  onChange={(event) =>
+                    setProductForm({ ...productForm, unit: event.target.value })
+                  }
+                  className="form-input"
+                />
+              </Field>
+            </div>
+            <Field label="Afbeeldings-URL">
               <input
-                value={productForm.code}
+                type="url"
+                value={productForm.image}
                 onChange={(event) =>
-                  setProductForm({ ...productForm, code: event.target.value })
+                  setProductForm({ ...productForm, image: event.target.value })
                 }
-                placeholder="Handmatig invullen"
                 className="form-input"
               />
             </Field>
-            <button className="w-full rounded-xl bg-jumbo py-3 font-black">
-              Product toevoegen
-            </button>
+            <Field label="Producttype">
+              <select
+                value={productForm.storage}
+                onChange={(event) =>
+                  setProductForm({
+                    ...productForm,
+                    storage: event.target.value as StorageType,
+                  })
+                }
+                className="form-input"
+              >
+                {([
+                  "Gekoeld",
+                  "Houdbaar",
+                  "Diepvries",
+                  "Vers",
+                ] as StorageType[]).map((storage) => (
+                  <option key={storage}>{storage}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Alternatieve producten">
+              <div className="max-h-40 space-y-2 overflow-auto rounded-xl border border-line p-3">
+                {products
+                  .filter((product) => product.id !== productForm.id)
+                  .map((product) => (
+                    <label
+                      key={product.id}
+                      className="flex min-h-11 items-center gap-3 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={productForm.alternativeIds.includes(
+                          product.id,
+                        )}
+                        onChange={() =>
+                          setProductForm({
+                            ...productForm,
+                            alternativeIds: productForm.alternativeIds.includes(
+                              product.id,
+                            )
+                              ? productForm.alternativeIds.filter(
+                                  (id) => id !== product.id,
+                                )
+                              : [...productForm.alternativeIds, product.id],
+                          })
+                        }
+                        className="h-5 w-5 accent-[#f9c900]"
+                      />
+                      {product.name}
+                    </label>
+                  ))}
+              </div>
+            </Field>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="flex min-h-12 items-center gap-3 rounded-xl bg-[#f3f3ee] px-3 text-sm font-bold">
+                <input
+                  type="checkbox"
+                  checked={productForm.preferred}
+                  onChange={(event) =>
+                    setProductForm({
+                      ...productForm,
+                      preferred: event.target.checked,
+                    })
+                  }
+                  className="h-5 w-5 accent-[#f9c900]"
+                />
+                Voorkeursproduct
+              </label>
+              <label className="flex min-h-12 items-center gap-3 rounded-xl bg-[#f3f3ee] px-3 text-sm font-bold">
+                <input
+                  type="checkbox"
+                  checked={productForm.enabled}
+                  onChange={(event) =>
+                    setProductForm({
+                      ...productForm,
+                      enabled: event.target.checked,
+                    })
+                  }
+                  className="h-5 w-5 accent-[#f9c900]"
+                />
+                Actief in menu
+              </label>
+            </div>
+            <div className="flex gap-3">
+              <button className="touch-button flex-1 rounded-xl bg-jumbo px-4 font-black">
+                {productForm.id ? "Wijzigingen opslaan" : "Product toevoegen"}
+              </button>
+              {productForm.id && (
+                <button
+                  type="button"
+                  onClick={() => setProductForm(emptyProductForm())}
+                  className="touch-button rounded-xl border border-line bg-white px-4 font-black"
+                >
+                  Annuleren
+                </button>
+              )}
+            </div>
           </AdminForm>
-          <CatalogList
-            products={products}
-            toggle={(id) =>
-              setProducts((current) =>
-                current.map((product) =>
-                  product.id === id
-                    ? { ...product, enabled: !product.enabled }
-                    : product,
-                ),
-              )
-            }
-          />
+          <div className="space-y-3">
+            {products.map((product) => (
+              <div
+                key={product.id}
+                className="grid gap-4 rounded-2xl border border-line bg-white p-4 sm:grid-cols-[72px_1fr_auto] sm:items-center"
+              >
+                <img
+                  src={product.image}
+                  alt=""
+                  className="h-[72px] w-[72px] rounded-xl object-cover"
+                />
+                <div className="min-w-0">
+                  <strong className="block text-base">{product.name}</strong>
+                  <p className="mt-1 text-sm text-muted">
+                    {product.brand} · {product.packageLabel} ·{" "}
+                    {money(product.price)}
+                  </p>
+                  <p className="mt-1 break-all text-xs text-muted">
+                    ID: {product.id} · Jumbo: {product.code || "niet ingevuld"}{" "}
+                    · EAN: {product.ean || "niet ingevuld"}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 sm:justify-end">
+                  <button
+                    onClick={() => editProduct(product)}
+                    className="touch-button flex items-center gap-2 rounded-xl border border-line px-4 text-sm font-black"
+                  >
+                    <Icon name="edit" size={17} /> Bewerken
+                  </button>
+                  <button
+                    onClick={() =>
+                      setProducts((current) =>
+                        current.map((entry) =>
+                          entry.id === product.id
+                            ? { ...entry, enabled: !entry.enabled }
+                            : entry,
+                        ),
+                      )
+                    }
+                    className={`touch-button rounded-xl px-4 text-sm font-black ${
+                      product.enabled
+                        ? "bg-jumbo-soft"
+                        : "bg-[#ededE7] text-muted"
+                    }`}
+                  >
+                    {product.enabled ? "Actief" : "Uitgeschakeld"}
+                  </button>
+                  <button
+                    onClick={() => setDeleteProduct(product)}
+                    className="touch-button flex items-center gap-2 rounded-xl border border-[#e2b4ae] px-4 text-sm font-black text-[#8e3025]"
+                  >
+                    <Icon name="trash" size={17} /> Verwijderen
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
+
       {tab === "recepten" && (
-        <div className="grid gap-6 lg:grid-cols-[380px_1fr]">
-          <AdminForm title="Nieuw recept" onSubmit={addRecipe}>
-            <Field label="Receptnaam">
+        <div className="grid gap-6 xl:grid-cols-[500px_1fr]">
+          <AdminForm
+            title={recipeForm.id ? "Recept bewerken" : "Nieuw recept"}
+            onSubmit={saveRecipe}
+          >
+            {recipeForm.id && (
+              <p className="rounded-xl bg-jumbo-soft p-3 text-xs">
+                <strong>Recept-ID blijft behouden:</strong> {recipeForm.id}
+              </p>
+            )}
+            <Field label="Receptnaam *">
               <input
                 required
                 value={recipeForm.name}
                 onChange={(event) =>
                   setRecipeForm({ ...recipeForm, name: event.target.value })
                 }
-                placeholder="Bijv. wraps met kip"
                 className="form-input"
               />
             </Field>
-            <Field label="Categorie">
-              <select
-                value={recipeForm.category}
+            <Field label="Omschrijving *">
+              <textarea
+                required
+                rows={3}
+                value={recipeForm.description}
                 onChange={(event) =>
                   setRecipeForm({
                     ...recipeForm,
-                    category: event.target.value as MenuCategory,
+                    description: event.target.value,
                   })
                 }
                 className="form-input"
-              >
-                <option>AVG & stamppot</option>
-                <option>Pasta & gerechten</option>
-              </select>
+              />
             </Field>
-            <div className="rounded-xl bg-[#f3f3ee] p-3">
-              <p className="mb-2 text-xs font-black uppercase tracking-wider text-muted">
-                Eerste ingrediënt
-              </p>
-              <Field label="Gekoppeld product">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Categorie">
                 <select
-                  value={recipeForm.productId}
+                  value={recipeForm.category}
                   onChange={(event) =>
                     setRecipeForm({
                       ...recipeForm,
-                      productId: event.target.value,
+                      category: event.target.value as MenuCategory,
                     })
                   }
                   className="form-input"
                 >
-                  {products
-                    .filter((product) => product.enabled)
-                    .map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name} · {product.packageLabel}
-                      </option>
-                    ))}
+                  <option>AVG & stamppot</option>
+                  <option>Pasta & gerechten</option>
                 </select>
               </Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Hoeveelheid">
-                  <input
-                    type="number"
-                    value={recipeForm.quantity}
-                    onChange={(event) =>
-                      setRecipeForm({
-                        ...recipeForm,
-                        quantity: event.target.value,
-                      })
-                    }
-                    className="form-input"
-                  />
-                </Field>
-                <Field label="Eenheid">
-                  <select
-                    value={recipeForm.unit}
-                    onChange={(event) =>
-                      setRecipeForm({ ...recipeForm, unit: event.target.value })
-                    }
-                    className="form-input"
+              <Field label="Afbeeldings-URL">
+                <input
+                  type="url"
+                  value={recipeForm.image}
+                  onChange={(event) =>
+                    setRecipeForm({ ...recipeForm, image: event.target.value })
+                  }
+                  className="form-input"
+                />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Standaard personen">
+                <input
+                  type="number"
+                  min="1"
+                  value={recipeForm.servings}
+                  onChange={(event) =>
+                    setRecipeForm({
+                      ...recipeForm,
+                      servings: event.target.value,
+                    })
+                  }
+                  className="form-input"
+                />
+              </Field>
+              <Field label="Bereidingstijd">
+                <input
+                  type="number"
+                  min="1"
+                  value={recipeForm.minutes}
+                  onChange={(event) =>
+                    setRecipeForm({
+                      ...recipeForm,
+                      minutes: event.target.value,
+                    })
+                  }
+                  className="form-input"
+                />
+              </Field>
+            </div>
+            <Field label="Bereidingsnotities">
+              <textarea
+                rows={3}
+                value={recipeForm.notes}
+                onChange={(event) =>
+                  setRecipeForm({ ...recipeForm, notes: event.target.value })
+                }
+                className="form-input"
+              />
+            </Field>
+            <div>
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="font-black">Ingrediënten</h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const product =
+                      products.find((item) => item.enabled) || products[0]
+                    if (!product) return
+                    setRecipeForm((current) => ({
+                      ...current,
+                      ingredients: [
+                        ...current.ingredients,
+                        {
+                          id: `ingredient-${Date.now()}`,
+                          name: product.name,
+                          productId: product.id,
+                          quantity: 1,
+                          unit: product.unit,
+                        },
+                      ],
+                    }))
+                  }}
+                  className="touch-button flex items-center gap-2 rounded-xl bg-jumbo px-4 text-sm font-black"
+                >
+                  <Icon name="plus" size={17} /> Ingrediënt
+                </button>
+              </div>
+              <div className="space-y-3">
+                {recipeForm.ingredients.map((ingredient, index) => (
+                  <div
+                    key={ingredient.id}
+                    className="rounded-2xl border border-line bg-[#f7f7f3] p-3"
                   >
-                    <option>g</option>
-                    <option>ml</option>
-                    <option>st</option>
-                    <option>pak</option>
-                  </select>
-                </Field>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Naam">
+                        <input
+                          value={ingredient.name}
+                          onChange={(event) =>
+                            updateIngredient(index, {
+                              name: event.target.value,
+                            })
+                          }
+                          className="form-input"
+                        />
+                      </Field>
+                      <Field label="Gekoppeld product">
+                        <select
+                          value={ingredient.productId}
+                          onChange={(event) => {
+                            const product = products.find(
+                              (item) => item.id === event.target.value,
+                            )
+                            updateIngredient(index, {
+                              productId: event.target.value,
+                              name: product?.name || ingredient.name,
+                            })
+                          }}
+                          className="form-input"
+                        >
+                          {products.map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.name}{" "}
+                              {!product.enabled && "(uitgeschakeld)"}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <Field label="Hoeveelheid">
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={ingredient.quantity}
+                          onChange={(event) =>
+                            updateIngredient(index, {
+                              quantity: Number(event.target.value),
+                            })
+                          }
+                          className="form-input"
+                        />
+                      </Field>
+                      <Field label="Eenheid">
+                        <input
+                          value={ingredient.unit}
+                          onChange={(event) =>
+                            updateIngredient(index, {
+                              unit: event.target.value,
+                            })
+                          }
+                          className="form-input"
+                        />
+                      </Field>
+                    </div>
+                    <Field label="Alternatieven">
+                      <select
+                        multiple
+                        value={ingredient.alternativeProductIds || []}
+                        onChange={(event) =>
+                          updateIngredient(index, {
+                            alternativeProductIds: [
+                              ...event.target.selectedOptions,
+                            ].map((option) => option.value),
+                          })
+                        }
+                        className="form-input min-h-28"
+                      >
+                        {products
+                          .filter(
+                            (product) => product.id !== ingredient.productId,
+                          )
+                          .map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.name}
+                            </option>
+                          ))}
+                      </select>
+                    </Field>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={index === 0}
+                        onClick={() => moveIngredient(index, -1)}
+                        className="touch-button rounded-xl border border-line bg-white px-4 text-sm font-black disabled:opacity-30"
+                      >
+                        Omhoog
+                      </button>
+                      <button
+                        type="button"
+                        disabled={index === recipeForm.ingredients.length - 1}
+                        onClick={() => moveIngredient(index, 1)}
+                        className="touch-button rounded-xl border border-line bg-white px-4 text-sm font-black disabled:opacity-30"
+                      >
+                        Omlaag
+                      </button>
+                      <button
+                        type="button"
+                        disabled={recipeForm.ingredients.length === 1}
+                        onClick={() =>
+                          setRecipeForm((current) => ({
+                            ...current,
+                            ingredients: current.ingredients.filter(
+                              (_, itemIndex) => itemIndex !== index,
+                            ),
+                          }))
+                        }
+                        className="touch-button ml-auto flex items-center gap-2 rounded-xl border border-[#e2b4ae] px-4 text-sm font-black text-[#8e3025] disabled:opacity-30"
+                      >
+                        <Icon name="trash" size={16} /> Verwijder
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
-            <p className="text-xs text-muted">
-              Het recept start met één ingrediënt. Uitbreiden en alternatieven
-              beheren kan via de productkoppelingen.
-            </p>
-            <button className="w-full rounded-xl bg-jumbo py-3 font-black">
-              Recept toevoegen
-            </button>
+            <label className="flex min-h-12 items-center gap-3 rounded-xl bg-[#f3f3ee] px-3 text-sm font-bold">
+              <input
+                type="checkbox"
+                checked={recipeForm.enabled}
+                onChange={(event) =>
+                  setRecipeForm({
+                    ...recipeForm,
+                    enabled: event.target.checked,
+                  })
+                }
+                className="h-5 w-5 accent-[#f9c900]"
+              />
+              Actief in bestelmenu
+            </label>
+            <div className="flex gap-3">
+              <button className="touch-button flex-1 rounded-xl bg-jumbo px-4 font-black">
+                {recipeForm.id ? "Wijzigingen opslaan" : "Recept toevoegen"}
+              </button>
+              {recipeForm.id && (
+                <button
+                  type="button"
+                  onClick={() => setRecipeForm(emptyRecipeForm(products))}
+                  className="touch-button rounded-xl border border-line bg-white px-4 font-black"
+                >
+                  Annuleren
+                </button>
+              )}
+            </div>
           </AdminForm>
           <div className="space-y-3">
             {recipes.map((recipe) => (
               <div
                 key={recipe.id}
-                className="flex items-center gap-4 rounded-2xl border border-line bg-white p-4"
+                className="grid gap-4 rounded-2xl border border-line bg-white p-4 sm:grid-cols-[72px_1fr_auto] sm:items-center"
               >
                 <img
                   src={recipe.image}
                   alt=""
-                  className="h-16 w-16 rounded-xl object-cover"
+                  className="h-[72px] w-[72px] rounded-xl object-cover"
                 />
-                <div className="min-w-0 flex-1">
+                <div>
                   <strong>{recipe.name}</strong>
-                  <p className="text-xs text-muted">
+                  <p className="mt-1 text-sm text-muted">
                     {recipe.category} · {recipe.servings} personen ·{" "}
                     {recipe.ingredients.length} ingrediënten
                   </p>
+                  <p className="mt-1 text-xs text-muted">ID: {recipe.id}</p>
                 </div>
-                <button
-                  onClick={() =>
-                    setRecipes((current) =>
-                      current.map((entry) =>
-                        entry.id === recipe.id
-                          ? { ...entry, enabled: !entry.enabled }
-                          : entry,
-                      ),
-                    )
-                  }
-                  className={`rounded-full px-3 py-1.5 text-xs font-black ${
-                    recipe.enabled ? "bg-jumbo-soft" : "bg-[#ededE7] text-muted"
-                  }`}
-                >
-                  {recipe.enabled ? "Actief" : "Uitgeschakeld"}
-                </button>
+                <div className="flex flex-wrap gap-2 sm:justify-end">
+                  <button
+                    onClick={() => editRecipe(recipe)}
+                    className="touch-button flex items-center gap-2 rounded-xl border border-line px-4 text-sm font-black"
+                  >
+                    <Icon name="edit" size={17} /> Bewerken
+                  </button>
+                  <button
+                    onClick={() =>
+                      setRecipes((current) =>
+                        current.map((entry) =>
+                          entry.id === recipe.id
+                            ? { ...entry, enabled: !entry.enabled }
+                            : entry,
+                        ),
+                      )
+                    }
+                    className={`touch-button rounded-xl px-4 text-sm font-black ${
+                      recipe.enabled
+                        ? "bg-jumbo-soft"
+                        : "bg-[#ededE7] text-muted"
+                    }`}
+                  >
+                    {recipe.enabled ? "Actief" : "Uitgeschakeld"}
+                  </button>
+                  <button
+                    onClick={() => setDeleteRecipe(recipe)}
+                    className="touch-button flex items-center gap-2 rounded-xl border border-[#e2b4ae] px-4 text-sm font-black text-[#8e3025]"
+                  >
+                    <Icon name="trash" size={17} /> Verwijderen
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
+
       {tab === "koppelingen" && (
         <div className="rounded-[26px] border border-line bg-white p-6">
           <h2 className="text-xl font-black">
@@ -2013,52 +2962,145 @@ function Admin({
           </div>
         </div>
       )}
+
+      {deleteProduct && (
+        <ConfirmDialog
+          title={
+            productReferences.length ||
+            productAlternativeReferences.length ||
+            productInCart ||
+            productInStock
+              ? "Dit product is nog in gebruik"
+              : `Product “${deleteProduct.name}” verwijderen?`
+          }
+          text={
+            productReferences.length ||
+            productAlternativeReferences.length ||
+            productInCart ||
+            productInStock
+              ? `Het product wordt nog gebruikt door ${[
+                  ...productReferences.map((recipe) => recipe.name),
+                  ...productAlternativeReferences.map(
+                    (product) => `alternatief van ${product.name}`,
+                  ),
+                  ...(productInCart ? ["de huidige bestelling"] : []),
+                  ...(productInStock ? ["de voorraad"] : []),
+                ].join(
+                  ", ",
+                )}. Het record wordt daarom veilig uitgeschakeld en niet verwijderd.`
+              : "Het product wordt definitief uit de lokale catalogus verwijderd. Recepten en voorraad worden niet aangepast."
+          }
+          confirmLabel={
+            productReferences.length ||
+            productAlternativeReferences.length ||
+            productInCart ||
+            productInStock
+              ? "Product deactiveren"
+              : "Product verwijderen"
+          }
+          destructive
+          cancel={() => setDeleteProduct(null)}
+          confirm={() => {
+            if (
+              productReferences.length ||
+              productAlternativeReferences.length ||
+              productInCart ||
+              productInStock
+            )
+              setProducts((current) =>
+                current.map((product) =>
+                  product.id === deleteProduct.id
+                    ? { ...product, enabled: false }
+                    : product,
+                ),
+              )
+            else
+              setProducts((current) =>
+                current.filter((product) => product.id !== deleteProduct.id),
+              )
+            setDeleteProduct(null)
+            flash(
+              productReferences.length ||
+                productAlternativeReferences.length ||
+                productInCart ||
+                productInStock
+                ? "Product veilig gedeactiveerd"
+                : "Product verwijderd",
+            )
+          }}
+        />
+      )}
+      {deleteRecipe && (
+        <ConfirmDialog
+          title={`Recept “${deleteRecipe.name}” verwijderen?`}
+          text={
+            recipeInCart
+              ? "Dit recept staat in de huidige winkelmand. Bij bevestigen wordt alleen deze geplande maaltijd mee uit de actieve winkelmand verwijderd; producten en andere recepten blijven behouden."
+              : "Het recept wordt uit de lokale receptdatabase verwijderd. Productrecords blijven behouden."
+          }
+          confirmLabel="Recept verwijderen"
+          destructive
+          cancel={() => setDeleteRecipe(null)}
+          confirm={() => {
+            setRecipes((current) =>
+              current.filter((recipe) => recipe.id !== deleteRecipe.id),
+            )
+            if (recipeInCart)
+              setCart((current) =>
+                current.filter(
+                  (item) =>
+                    item.kind !== "meal" || item.recipeId !== deleteRecipe.id,
+                ),
+              )
+            setDeleteRecipe(null)
+            flash("Recept verwijderd")
+          }}
+        />
+      )}
     </section>
   )
 }
 
-function CatalogList({
-  products,
-  toggle,
+/** Herbruikbare bevestiging voor destructieve acties. */
+function ConfirmDialog({
+  title,
+  text,
+  confirmLabel,
+  destructive = false,
+  cancel,
+  confirm,
 }: {
-  products: Product[]
-  toggle: (id: string) => void
+  title: string
+  text: string
+  confirmLabel: string
+  destructive?: boolean
+  cancel: () => void
+  confirm: () => void
 }) {
   return (
-    <div className="space-y-3">
-      {products.map((product) => (
-        <div
-          key={product.id}
-          className="flex items-center gap-4 rounded-2xl border border-line bg-white p-4"
+    <Modal title={title} close={cancel}>
+      <p className="text-base leading-relaxed text-muted">{text}</p>
+      <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+        <button
+          onClick={cancel}
+          className="touch-button rounded-xl border border-line bg-white px-5 font-black"
         >
-          <img
-            src={product.image}
-            alt=""
-            className="h-16 w-16 rounded-xl object-cover"
-          />
-          <div className="min-w-0 flex-1">
-            <strong className="block truncate">{product.name}</strong>
-            <p className="text-xs text-muted">
-              {product.brand} · {product.packageLabel} · {money(product.price)}
-            </p>
-            <p className="mt-1 text-[11px] text-muted">
-              Interne ID: {product.id} · Jumbo-code:{" "}
-              {product.code || "niet ingevuld"}
-            </p>
-          </div>
-          <button
-            onClick={() => toggle(product.id)}
-            className={`rounded-full px-3 py-1.5 text-xs font-black ${
-              product.enabled ? "bg-jumbo-soft" : "bg-[#ededE7] text-muted"
-            }`}
-          >
-            {product.enabled ? "Actief" : "Uitgeschakeld"}
-          </button>
-        </div>
-      ))}
-    </div>
+          Annuleren
+        </button>
+        <button
+          onClick={confirm}
+          className={`touch-button rounded-xl px-5 font-black ${
+            destructive ? "bg-[#982f24] text-white" : "bg-jumbo"
+          }`}
+        >
+          {confirmLabel}
+        </button>
+      </div>
+    </Modal>
   )
 }
+
+/** Gedeelde formulierkaart voor zowel toevoegen als bewerken. */
 function AdminForm({
   title,
   onSubmit,
@@ -2078,6 +3120,7 @@ function AdminForm({
     </form>
   )
 }
+/** Label en invoerveld worden samen gegroepeerd voor leesbaarheid en toegankelijkheid. */
 function Field({
   label,
   children,
@@ -2094,6 +3137,7 @@ function Field({
     </label>
   )
 }
+/** Grote plus/minbediening voor aantallen en personen. */
 function Counter({
   value,
   onMinus,
@@ -2114,7 +3158,7 @@ function Counter({
         type="button"
         disabled={value <= 1}
         aria-label="Verlagen"
-        className={`grid h-9 w-9 place-items-center rounded-lg border disabled:opacity-30 ${
+        className={`grid h-12 w-12 place-items-center rounded-xl border disabled:opacity-30 ${
           dark
             ? "border-white/20 bg-white/10 text-white"
             : "border-line bg-white"
@@ -2127,7 +3171,7 @@ function Counter({
         onClick={onPlus}
         type="button"
         aria-label="Verhogen"
-        className="grid h-9 w-9 place-items-center rounded-lg bg-jumbo text-ink"
+        className="grid h-12 w-12 place-items-center rounded-xl bg-jumbo text-ink"
       >
         <Icon name="plus" size={16} />
       </button>
@@ -2152,6 +3196,7 @@ function InfoCard({ title, text }: { title: string text: string }) {
     </div>
   )
 }
+/** Scrollbare dialoog die ook binnen een staande tabletviewport past. */
 function Modal({
   title,
   close,
@@ -2188,6 +3233,7 @@ function Modal({
     </div>
   )
 }
+/** Onderste schuiflade voor de winkelmand op smallere tablets en telefoons. */
 function Drawer({
   close,
   children,
@@ -2207,6 +3253,7 @@ function Drawer({
     </div>
   )
 }
+/** Herbruikbare lege toestand met optionele vervolgstap. */
 function Empty({
   title,
   text,

@@ -1,5 +1,12 @@
 import type { MenuCategory, Product, Recipe } from "./types"
 
+/**
+ * Lokale voorbeeldcatalogus.
+ *
+ * Pas hier de standaardproducten, recepten, afbeeldingen en hoeveelheden aan.
+ * De beheeromgeving kopieert deze gegevens bij de eerste start naar
+ * localStorage; latere wijzigingen gebeuren in de browsercatalogus.
+ */
 const FOOD =
   "https://images.unsplash.com/photo-1547573854-74d2a71d0826?auto=format&fit=crop&w=900&q=80"
 const PIZZA =
@@ -43,6 +50,7 @@ const product = (
   preferred: true,
 })
 
+/** Productrecords zijn herbruikbaar in meerdere recepten en menuonderdelen. */
 export const seedProducts: Product[] = [
   product(
     "spaghetti",
@@ -555,6 +563,7 @@ const ingredient = (
   unit,
 })
 
+/** Recepten verwijzen via `productId` naar de productcatalogus hierboven. */
 export const seedRecipes: Recipe[] = [
   {
     id: "spaghetti-recipe",
@@ -571,20 +580,6 @@ export const seedRecipes: Recipe[] = [
       ingredient("gehakt-i", "Rundergehakt", "gehakt-500", 500, "g"),
       ingredient("courgette-i", "Courgette", "courgette", 1, "st"),
       ingredient("mix-i", "Spaghettimix", "spaghettimix", 1, "pak"),
-    ],
-  },
-  {
-    id: "carbonara-recipe",
-    name: "Carbonara",
-    category: "Pasta & gerechten",
-    description: "Romige pasta voor een snelle doordeweekse avond.",
-    image: FOOD,
-    servings: 4,
-    minutes: 20,
-    enabled: true,
-    ingredients: [
-      ingredient("pasta-c", "Spaghetti", "spaghetti", 500, "g"),
-      ingredient("gehakt-c", "Spekvervanger: gehakt", "gehakt-300", 300, "g"),
     ],
   },
   {
@@ -648,6 +643,7 @@ export const seedRecipes: Recipe[] = [
   },
 ]
 
+/** Volgorde en teksten van de categorieknoppen in de bestelzuil. */
 export const menuCategories: { name: MenuCategory description: string }[] = [
   { name: "AVG & stamppot", description: "Klassiek of zelf samenstellen" },
   { name: "Pasta & gerechten", description: "Favoriete gezinsmaaltijden" },
@@ -658,6 +654,7 @@ export const menuCategories: { name: MenuCategory description: string }[] = [
   { name: "Huishouden", description: "Voorraad voor in huis" },
 ]
 
+/** Product-ID's per stap van de AVG-wizard; producten zelf blijven centraal beheerd. */
 export const avgSteps = [
   {
     title: "Kies je aardappelen",
